@@ -1,12 +1,17 @@
 pub mod stdio {
     use std::{
-        collections::HashMap, fmt::Display, io::{stdin, stdout, Read, Write}, ops::BitAnd
+        collections::HashMap,
+        fmt::Display,
+        io::{stdin, stdout, Read, Write},
+        ops::{BitAnd, BitOr},
     };
 
     const FORWARD_STDOUT_OPTION: (&str, &str) = ("forward-stdout", "--forward-stdout");
-    const BACKWARD_STDOUT_OPTION: (&str, &str) = ("backard-stdout", "--backard-stdout");
+    const BACKWARD_STDOUT_OPTION: (&str, &str) = ("backward-stdout", "--backward-stdout");
 
-    use cliparser::types::{Argument, ArgumentHelp, ArgumentOccurrence, ArgumentValueType, CliParsed, CliSpec};
+    use cliparser::types::{
+        Argument, ArgumentHelp, ArgumentOccurrence, ArgumentValueType, CliParsed, CliSpec,
+    };
 
     use crate::{
         base::base::DebugLevel, BoxedClone, Entry, EntryStatic, Error, Pipeline, Step, StepStatic,
@@ -51,11 +56,7 @@ pub mod stdio {
 
     impl EntryStatic for StdioEntry {
         #[allow(unused_variables)]
-        fn new(
-            args: CliParsed,
-            pipeline: Pipeline,
-            debug_level: DebugLevel,
-        ) -> Self {
+        fn new(args: CliParsed, pipeline: Pipeline, debug_level: DebugLevel) -> Self {
             Self {
                 pipeline,
                 debug_level,
@@ -119,6 +120,21 @@ pub mod stdio {
         }
     }
 
+    impl BitOr for StdoutMode {
+        type Output = StdoutMode;
+
+        fn bitor(self, rhs: Self) -> Self::Output {
+            let result = (self as u8) | (rhs as u8);
+            match result {
+                0x00 => StdoutMode::None,
+                0x01 => StdoutMode::Forward,
+                0x02 => StdoutMode::Backward,
+                0x03 => StdoutMode::Both,
+                _ => unreachable!(),
+            }
+        }
+    }
+
     pub struct StdioStep {
         stdout_mode: StdoutMode,
         debug_level: DebugLevel,
@@ -128,8 +144,10 @@ pub mod stdio {
         fn process_data_forward(&self, data: Vec<u8>) -> Result<Vec<u8>, Error> {
             let mut io = stdout();
             if self.debug_level as usize > 2 {
-                io.write("++++++++++++++++++++++++++++++++++".as_bytes())?;
-                io.write("\n stdio forward : \n".as_bytes())?;
+                io.write("\n++++++++++++++++++++++++++++++++++".as_bytes())?;
+                io.write("\nstdio forward : \n".as_bytes())?;
+                io.write(data.as_slice())?;
+                io.write("++++++++++++++++++++++++++++++++++\n".as_bytes())?;
             }
             if self.stdout_mode & StdoutMode::Forward == StdoutMode::Forward
                 && self.debug_level as usize <= 2
@@ -142,8 +160,10 @@ pub mod stdio {
         fn process_data_backward(&self, data: Vec<u8>) -> Result<Vec<u8>, Error> {
             let mut io = stdout();
             if self.debug_level as usize > 2 {
-                io.write("++++++++++++++++++++++++++++++++++".as_bytes())?;
-                io.write("\n stdio backward : \n".as_bytes())?;
+                io.write("\n++++++++++++++++++++++++++++++++++\n".as_bytes())?;
+                io.write("\nstdio backward : \n".as_bytes())?;
+                io.write(data.as_slice())?;
+                io.write("++++++++++++++++++++++++++++++++++\n".as_bytes())?;
             }
             if self.stdout_mode & StdoutMode::Backward == StdoutMode::Backward
                 && self.debug_level as usize <= 2
@@ -164,16 +184,13 @@ pub mod stdio {
     }
 
     impl StepStatic for StdioStep {
-        fn new(
-            args: CliParsed,
-            debug_level: DebugLevel,
-        ) -> Self {
+        fn new(args: CliParsed, debug_level: DebugLevel) -> Self {
             let mut stdout_mode = StdoutMode::None;
             if args.arguments.contains(FORWARD_STDOUT_OPTION.0) {
-                stdout_mode = stdout_mode & StdoutMode::Forward;
+                stdout_mode = stdout_mode | StdoutMode::Forward;
             }
             if args.arguments.contains(BACKWARD_STDOUT_OPTION.0) {
-                stdout_mode = stdout_mode & StdoutMode::Backward;
+                stdout_mode = stdout_mode | StdoutMode::Backward;
             }
             Self {
                 stdout_mode,
@@ -184,20 +201,24 @@ pub mod stdio {
         fn get_cmd(mut argument: CliSpec) -> CliSpec {
             argument = argument.add_argument(Argument {
                 name: FORWARD_STDOUT_OPTION.0.to_string(),
-                key: vec![FORWARD_STDOUT_OPTION.1.to_string(),],
+                key: vec![FORWARD_STDOUT_OPTION.1.to_string()],
                 argument_occurrence: ArgumentOccurrence::Single,
                 value_type: ArgumentValueType::None,
                 default_value: None,
-                help: Some(ArgumentHelp::Text("print into stdout when pipeline direction is forward".to_string())),
+                help: Some(ArgumentHelp::Text(
+                    "print into stdout when pipeline direction is forward".to_string(),
+                )),
             });
 
             argument = argument.add_argument(Argument {
                 name: BACKWARD_STDOUT_OPTION.0.to_string(),
-                key: vec![BACKWARD_STDOUT_OPTION.1.to_string(),],
+                key: vec![BACKWARD_STDOUT_OPTION.1.to_string()],
                 argument_occurrence: ArgumentOccurrence::Single,
                 value_type: ArgumentValueType::None,
                 default_value: None,
-                help: Some(ArgumentHelp::Text("print into stdout when pipeline direction is backward".to_string())),
+                help: Some(ArgumentHelp::Text(
+                    "print into stdout when pipeline direction is backward".to_string(),
+                )),
             });
             argument
         }

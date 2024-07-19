@@ -1,10 +1,6 @@
 pub mod base {
     use std::{
-        collections::HashMap,
-        io,
-        iter::Rev,
-        ops::{Deref, DerefMut},
-        slice::Iter,
+        collections::HashMap, io, iter::Rev, ops::{Deref, DerefMut}, result, slice::Iter
     };
 
     use cliparser::types::{CliParsed, CliSpec};
@@ -24,6 +20,18 @@ pub mod base {
     impl From<io::Error> for Error {
         fn from(value: io::Error) -> Self {
             Error::IoError(value)
+        }
+    }
+
+    impl From<i32> for DebugLevel{
+        fn from(value: i32) -> Self {
+            match value {
+                0 => DebugLevel::None,
+                1 => DebugLevel::Crit,
+                2 => DebugLevel::Warn,
+                3 => DebugLevel::Info,
+                _ => DebugLevel::Info,
+            }
         }
     }
 
@@ -68,7 +76,20 @@ pub mod base {
     }
 
     pub struct Pipeline {
-        pub steps: Vec<Box<dyn Step>>,
+        steps: Vec<Box<dyn Step>>,
+    }
+
+    impl Pipeline {
+        pub fn new()->Self{
+            Pipeline{
+                steps: Vec::new()
+            }
+        }
+
+        pub fn add_step(&mut self, step: Box<dyn Step>){
+            self.steps.push(step);
+        }
+
     }
 
     impl Deref for Pipeline {
