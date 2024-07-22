@@ -1,21 +1,20 @@
-use std::collections::HashMap;
 use std::process::exit;
-use std::{env, process};
+use std::env;
 
-use kproxy::{DebugLevel, Entry, EntryStatic, Pipeline, StdioEntry, StdioStep, StepStatic};
+use kproxy::{DebugLevel, Entry, EntryStatic, Pipeline, StdioEntry, StdioStep, StepStatic, BUFFER_SIZE};
 
 use cliparser::types::{
     Argument, ArgumentHelp, ArgumentOccurrence, ArgumentValueType, CliParsed, CliSpec,
-    CliSpecMetaInfo, PositionalArgument,
+    CliSpecMetaInfo,
 };
 use cliparser::{help, parse, version};
-use std::collections::HashSet;
 
 const HELP : (&str, &str, &str, &str)= ("Help", "--help", "-h", "Show help and exit");
 const VERSION : (&str, &str, &str, &str)= ("Version", "--version", "-v", "Show version and exit");
 const DEBUG_LEVEL : (&str, &str, &str, &str)= ("Debug", "--debug", "-d", "Debug Level from 0 to 3 (0 wouldnt show anything).");
 const ENTRY : (&str, &str, &str, &str)= ("Entry", "--entry", "-e", "Entry step of pipeline");
 const STEP : (&str, &str, &str, &str)= ("Step", "--step", "-s", "Step of pipeline");
+
 
 fn main() {
     let mut cli_spec = CliSpec::new();
@@ -67,6 +66,15 @@ fn main() {
         value_type: ArgumentValueType::Single,
         default_value: None,
         help: Some(ArgumentHelp::Text(STEP.3.to_string())),
+    });
+
+    cli_spec = cli_spec.add_argument(Argument {
+        name: BUFFER_SIZE.0.to_string(),
+        key: vec![BUFFER_SIZE.1.to_string(), BUFFER_SIZE.2.to_string()],
+        argument_occurrence: ArgumentOccurrence::Single,
+        value_type: ArgumentValueType::Single,
+        default_value: "8192",
+        help: Some(ArgumentHelp::Text(BUFFER_SIZE.3.to_string())),
     });
 
     cli_spec = StdioStep::get_cmd(cli_spec);
@@ -148,7 +156,7 @@ fn run(cli_parsed: CliParsed, debug_level:DebugLevel) {
         match Some(step){
             Some("stdio") => {
                 pipeline.add_step(
-                    Box::new(StdioStep::new(cli_parsed.clone(), debug_level))
+                    Box::new(StdioStep::new(cli_parsed.clone(), debug_level).unwrap())
                 )
             },
             Some(_)=>{
@@ -169,7 +177,7 @@ fn run(cli_parsed: CliParsed, debug_level:DebugLevel) {
             exit(1);
         },
         None => todo!(),
-    };
+    }.unwrap();
 
-    entry.listen();
+    entry.listen().unwrap_err();
 }

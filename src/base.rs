@@ -1,13 +1,18 @@
 pub mod base {
     use std::{
-        collections::HashMap, io, iter::Rev, ops::{Deref, DerefMut}, result, slice::Iter
+        collections::HashMap, error, io, iter::Rev, net::AddrParseError, ops::{Deref, DerefMut}, result, slice::Iter
     };
 
     use cliparser::types::{CliParsed, CliSpec};
 
+    #[derive(Debug)]
     pub enum Error {
+        Msg(String),
         IoError(io::Error),
         Unknown,
+        RequireOption(String),
+        ParseIntError,
+        AddrParseError(AddrParseError)
     }
 
     pub enum DebugLevel {
@@ -20,6 +25,12 @@ pub mod base {
     impl From<io::Error> for Error {
         fn from(value: io::Error) -> Self {
             Error::IoError(value)
+        }
+    }
+
+    impl From<AddrParseError> for Error{
+        fn from(value: AddrParseError) -> Self {
+            Error::AddrParseError(value)
         }
     }
 
@@ -45,7 +56,7 @@ pub mod base {
     }
 
     pub trait StepStatic: Copy + Clone {
-        fn new(args: CliParsed, debug_level: DebugLevel) -> Self;
+        fn new(args: CliParsed, debug_level: DebugLevel) -> Result<Self, Error>;
         fn get_cmd(argument: CliSpec) -> CliSpec;
     }
 
@@ -66,12 +77,14 @@ pub mod base {
         fn listen(&mut self) -> Result<(), Error>;
     }
 
-    pub trait EntryStatic {
+    pub trait EntryStatic<T>
+    where T: Entry
+    {
         fn new(
             args: CliParsed,
             pipeline: Pipeline,
             debug_level: DebugLevel,
-        ) -> Self;
+        ) -> Result<T, Error>;
         fn get_cmd(argument: CliSpec) -> CliSpec;
     }
 

@@ -7,3 +7,4 @@ edition = "2021"
 [dependencies]
 cliparser = "0.1.2"
 libc = "0.2.155"
+mio = {version = "1.0.0", features = ['net','log','os-poll']}

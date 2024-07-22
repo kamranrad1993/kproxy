@@ -1,13 +1,20 @@
 pub mod stdio {
     use std::{
-        collections::HashMap,
         fmt::Display,
         io::{stdin, stdout, Read, Write},
         ops::{BitAnd, BitOr},
     };
 
-    const FORWARD_STDOUT_OPTION: (&str, &str) = ("forward-stdout", "--forward-stdout");
-    const BACKWARD_STDOUT_OPTION: (&str, &str) = ("backward-stdout", "--backward-stdout");
+    const FORWARD_STDOUT_OPTION: (&str, &str, &str) = (
+        "forward-stdout",
+        "--forward-stdout",
+        "(StdioStep) print into stdout when pipeline direction is forward",
+    );
+    const BACKWARD_STDOUT_OPTION: (&str, &str, &str) = (
+        "backward-stdout",
+        "--backward-stdout",
+        "(StdioStep) print into stdout when pipeline direction is backward",
+    );
 
     use cliparser::types::{
         Argument, ArgumentHelp, ArgumentOccurrence, ArgumentValueType, CliParsed, CliSpec,
@@ -54,13 +61,17 @@ pub mod stdio {
         }
     }
 
-    impl EntryStatic for StdioEntry {
+    impl EntryStatic<StdioEntry> for StdioEntry {
         #[allow(unused_variables)]
-        fn new(args: CliParsed, pipeline: Pipeline, debug_level: DebugLevel) -> Self {
-            Self {
+        fn new(
+            args: CliParsed,
+            pipeline: Pipeline,
+            debug_level: DebugLevel,
+        ) -> Result<StdioEntry, Error> {
+            Ok(Self {
                 pipeline,
                 debug_level,
-            }
+            })
         }
 
         fn get_cmd(argument: CliSpec) -> CliSpec {
@@ -184,7 +195,7 @@ pub mod stdio {
     }
 
     impl StepStatic for StdioStep {
-        fn new(args: CliParsed, debug_level: DebugLevel) -> Self {
+        fn new(args: CliParsed, debug_level: DebugLevel) -> Result<Self, Error> {
             let mut stdout_mode = StdoutMode::None;
             if args.arguments.contains(FORWARD_STDOUT_OPTION.0) {
                 stdout_mode = stdout_mode | StdoutMode::Forward;
@@ -192,10 +203,10 @@ pub mod stdio {
             if args.arguments.contains(BACKWARD_STDOUT_OPTION.0) {
                 stdout_mode = stdout_mode | StdoutMode::Backward;
             }
-            Self {
+            Ok(Self {
                 stdout_mode,
                 debug_level,
-            }
+            })
         }
 
         fn get_cmd(mut argument: CliSpec) -> CliSpec {
@@ -205,9 +216,7 @@ pub mod stdio {
                 argument_occurrence: ArgumentOccurrence::Single,
                 value_type: ArgumentValueType::None,
                 default_value: None,
-                help: Some(ArgumentHelp::Text(
-                    "print into stdout when pipeline direction is forward".to_string(),
-                )),
+                help: Some(ArgumentHelp::Text(BACKWARD_STDOUT_OPTION.2.to_string())),
             });
 
             argument = argument.add_argument(Argument {
@@ -216,9 +225,7 @@ pub mod stdio {
                 argument_occurrence: ArgumentOccurrence::Single,
                 value_type: ArgumentValueType::None,
                 default_value: None,
-                help: Some(ArgumentHelp::Text(
-                    "print into stdout when pipeline direction is backward".to_string(),
-                )),
+                help: Some(ArgumentHelp::Text(BACKWARD_STDOUT_OPTION.2.to_string())),
             });
             argument
         }
