@@ -2,8 +2,7 @@ pub const BUFFER_SIZE : (&str, &str, &str, &str)= ("BufferSize", "--buffer-size"
 
 mod base;
 use std::{
-    net::{IpAddr, SocketAddr, ToSocketAddrs},
-    str::FromStr,
+    net::{IpAddr, SocketAddr, ToSocketAddrs}, ops::Deref, str::FromStr
 };
 
 pub use base::base::{
@@ -14,7 +13,7 @@ mod stdio;
 pub use stdio::stdio::{StdioEntry, StdioStep};
 
 mod tcp;
-// pub use tcp::tcp;
+pub use tcp::tcp::{TcpEntry, TcpStep};
 
 pub fn create_socket_addr(address: &str, port: u16) -> Result<SocketAddr, Error> {
     if let Ok(ip) = IpAddr::from_str(address) {

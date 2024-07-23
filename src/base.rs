@@ -47,8 +47,8 @@ pub mod base {
     }
 
     pub trait Step: Send + Sync + BoxedClone {
-        fn process_data_forward(&self, data: Vec<u8>) -> Result<Vec<u8>, Error>;
-        fn process_data_backward(&self, data: Vec<u8>) -> Result<Vec<u8>, Error>;
+        fn process_data_forward(&self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error>;
+        fn process_data_backward(&self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error>;
     }
 
     pub trait BoxedClone {
@@ -142,7 +142,7 @@ pub mod base {
             self.iter()
         }
         pub fn iter_backward(&self) -> Rev<Iter<Box<dyn Step>>> {
-            self[0..self.len() - 1].iter().rev()
+            self[0..self.len()].iter().rev()
         }
     }
 }

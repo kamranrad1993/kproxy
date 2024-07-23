@@ -52,10 +52,10 @@ pub mod stdio {
     impl StdioEntry {
         fn handle_pipeline(&mut self, mut data: Vec<u8>) -> Result<(), Error> {
             for step in self.pipeline.iter_forwad() {
-                data = step.process_data_forward(data)?;
+                data = step.process_data_forward(&mut data)?;
             }
             for step in self.pipeline.iter_backward() {
-                data = step.process_data_backward(data)?;
+                data = step.process_data_backward(&mut data)?;
             }
             Ok(())
         }
@@ -152,7 +152,7 @@ pub mod stdio {
     }
 
     impl Step for StdioStep {
-        fn process_data_forward(&self, data: Vec<u8>) -> Result<Vec<u8>, Error> {
+        fn process_data_forward(&self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error> {
             let mut io = stdout();
             if self.debug_level as usize > 2 {
                 io.write("\n++++++++++++++++++++++++++++++++++".as_bytes())?;
@@ -165,10 +165,10 @@ pub mod stdio {
             {
                 io.write(data.as_slice())?;
             }
-            Ok(data)
+            Ok(data.clone())
         }
 
-        fn process_data_backward(&self, data: Vec<u8>) -> Result<Vec<u8>, Error> {
+        fn process_data_backward(&self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error> {
             let mut io = stdout();
             if self.debug_level as usize > 2 {
                 io.write("\n++++++++++++++++++++++++++++++++++\n".as_bytes())?;
@@ -181,7 +181,7 @@ pub mod stdio {
             {
                 io.write(data.as_slice())?;
             }
-            Ok(data)
+            Ok(data.clone())
         }
     }
 

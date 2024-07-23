@@ -10,10 +10,10 @@ pub mod tcp {
     use mio::net::{TcpListener, TcpStream};
     use mio::{Events, Interest, Poll, Token};
 
-    use crate::{create_socket_addr, BUFFER_SIZE};
     use crate::{
         base::base::DebugLevel, BoxedClone, Entry, EntryStatic, Error, Pipeline, Step, StepStatic,
     };
+    use crate::{create_socket_addr, BUFFER_SIZE};
 
     const TCP_ENTRY_ADDRESS: (&str, &str, &str) = (
         "tcp-entry-address",
@@ -28,7 +28,7 @@ pub mod tcp {
 
     const SERVER_TOKEN: Token = Token(0);
 
-    struct TcpEntry {
+    pub struct TcpEntry {
         address: String,
         port: u16,
         debug_level: DebugLevel,
@@ -61,8 +61,10 @@ pub mod tcp {
                                 token,
                                 Interest::READABLE | Interest::WRITABLE,
                             )?;
-                            self.connections
-                                .insert(token, (connection.0, self.pipeline_template.clone()));
+                            self.connections.insert(
+                                token,
+                                (connection.0, self.pipeline_template.clone(), vec![0u8; 0]),
+                            );
                             // drop(connection);
                         }
                         other => {
@@ -74,9 +76,13 @@ pub mod tcp {
                                 }
                             };
 
-                            if event.is_readable() {}
+                            if event.is_readable() {
+                                TcpEntry::read_client(self.buffer_size, client)?;
+                            }
 
-                            if event.is_writable() {}
+                            if event.is_writable() {
+                                TcpEntry::write_client(client)?;
+                            }
                         }
                         _ => unreachable!(),
                     }
@@ -119,7 +125,7 @@ pub mod tcp {
                 debug_level,
                 pipeline_template: pipeline,
                 connections: HashMap::new(),
-                buffer_size
+                buffer_size,
             })
         }
 
@@ -145,32 +151,36 @@ pub mod tcp {
     }
 
     impl TcpEntry {
-        fn read_client(&self, client: &mut (TcpStream, Pipeline)) -> Result<Vec<u8>, Error> {
-            let mut buffer = vec![0u8;self.buffer_size];
+        fn read_client(
+            buffer_size: usize,
+            client: &mut (TcpStream, Pipeline, Vec<u8>),
+        ) -> Result<(), Error> {
+            let mut buffer = vec![0u8; buffer_size];
             let size = client.0.read(&mut buffer)?;
             for step in client.1.iter_forwad() {
-                buffer = step.process_data_forward(buffer[0..size].to_vec())?;
+                buffer = step.process_data_forward(buffer[0..size].to_vec().as_mut())?;
             }
-            Ok(buffer)
+            client.2.extend(buffer);
+            Ok(())
         }
 
-        fn write_client(&self, mut buffer: Vec<u8>, client: &mut (TcpStream, Pipeline)) -> Result<(), Error> {
+        fn write_client(client: &mut (TcpStream, Pipeline, Vec<u8>)) -> Result<(), Error> {
             for step in client.1.iter_backward() {
-                buffer = step.process_data_backward(buffer)?;
+                client.2 = step.process_data_backward(&mut client.2)?;
             }
-
+            client.2.clear();
             Ok(())
         }
     }
 
-    struct TcpStep {}
+    pub struct TcpStep {}
 
     impl Step for TcpStep {
-        fn process_data_forward(&self, data: Vec<u8>) -> Result<Vec<u8>, Error> {
+        fn process_data_forward(&self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error> {
             todo!()
         }
 
-        fn process_data_backward(&self, data: Vec<u8>) -> Result<Vec<u8>, Error> {
+        fn process_data_backward(&self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error> {
             todo!()
         }
     }

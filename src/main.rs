@@ -1,7 +1,10 @@
-use std::process::exit;
 use std::env;
+use std::process::exit;
 
-use kproxy::{DebugLevel, Entry, EntryStatic, Pipeline, StdioEntry, StdioStep, StepStatic, BUFFER_SIZE};
+use kproxy::{
+    DebugLevel, Entry, EntryStatic, Pipeline, StdioEntry, StdioStep, StepStatic, TcpEntry, TcpStep,
+    BUFFER_SIZE,
+};
 
 use cliparser::types::{
     Argument, ArgumentHelp, ArgumentOccurrence, ArgumentValueType, CliParsed, CliSpec,
@@ -9,12 +12,16 @@ use cliparser::types::{
 };
 use cliparser::{help, parse, version};
 
-const HELP : (&str, &str, &str, &str)= ("Help", "--help", "-h", "Show help and exit");
-const VERSION : (&str, &str, &str, &str)= ("Version", "--version", "-v", "Show version and exit");
-const DEBUG_LEVEL : (&str, &str, &str, &str)= ("Debug", "--debug", "-d", "Debug Level from 0 to 3 (0 wouldnt show anything).");
-const ENTRY : (&str, &str, &str, &str)= ("Entry", "--entry", "-e", "Entry step of pipeline");
-const STEP : (&str, &str, &str, &str)= ("Step", "--step", "-s", "Step of pipeline");
-
+const HELP: (&str, &str, &str, &str) = ("Help", "--help", "-h", "Show help and exit");
+const VERSION: (&str, &str, &str, &str) = ("Version", "--version", "-v", "Show version and exit");
+const DEBUG_LEVEL: (&str, &str, &str, &str) = (
+    "Debug",
+    "--debug",
+    "-d",
+    "Debug Level from 0 to 3 (0 wouldnt show anything).",
+);
+const ENTRY: (&str, &str, &str, &str) = ("Entry", "--entry", "-e", "Entry step of pipeline");
+const STEP: (&str, &str, &str, &str) = ("Step", "--step", "-s", "Step of pipeline");
 
 fn main() {
     let mut cli_spec = CliSpec::new();
@@ -46,7 +53,7 @@ fn main() {
         key: vec![DEBUG_LEVEL.1.to_string(), DEBUG_LEVEL.2.to_string()],
         argument_occurrence: ArgumentOccurrence::Single,
         value_type: ArgumentValueType::Single,
-        default_value: None,
+        default_value: Some("0".to_string()),
         help: Some(ArgumentHelp::Text(DEBUG_LEVEL.3.to_string())),
     });
 
@@ -73,11 +80,14 @@ fn main() {
         key: vec![BUFFER_SIZE.1.to_string(), BUFFER_SIZE.2.to_string()],
         argument_occurrence: ArgumentOccurrence::Single,
         value_type: ArgumentValueType::Single,
-        default_value: "8192",
+        default_value: Some("8192".to_string()),
         help: Some(ArgumentHelp::Text(BUFFER_SIZE.3.to_string())),
     });
 
+    cli_spec = StdioEntry::get_cmd(cli_spec);
     cli_spec = StdioStep::get_cmd(cli_spec);
+    cli_spec = TcpEntry::get_cmd(cli_spec);
+    // cli_spec = TcpStep::get_cmd(cli_spec);
 
     let args = Vec::from_iter(env::args());
     let args = args
@@ -85,7 +95,7 @@ fn main() {
         .skip(1)
         .map(AsRef::as_ref)
         .collect::<Vec<&str>>();
-    
+
     let mut debug_level = DebugLevel::None;
 
     let result = parse(&args, &cli_spec);
@@ -96,11 +106,11 @@ fn main() {
                     Some(debug_str) => {
                         let i = str::parse::<i32>(debug_str[0].as_str()).unwrap();
                         DebugLevel::from(i)
-                    },
+                    }
                     None => {
                         eprintln!("No devug level mentioned");
                         exit(1);
-                    },
+                    }
                 }
             }
 
@@ -134,13 +144,13 @@ fn main() {
     // generate version text
 }
 
-fn run(cli_parsed: CliParsed, debug_level:DebugLevel) {
+fn run(cli_parsed: CliParsed, debug_level: DebugLevel) {
     let entry = match cli_parsed.argument_values.get(ENTRY.0) {
         Some(entry) => entry[0].as_str(),
         None => {
             eprintln!("No Entry was found");
             exit(1);
-        },
+        }
     };
 
     let steps = match cli_parsed.argument_values.get(STEP.0) {
@@ -148,36 +158,36 @@ fn run(cli_parsed: CliParsed, debug_level:DebugLevel) {
         None => {
             eprintln!("No Step Was Found");
             exit(1);
-        },
+        }
     };
 
     let mut pipeline = Pipeline::new();
     for step in steps {
-        match Some(step){
-            Some("stdio") => {
-                pipeline.add_step(
-                    Box::new(StdioStep::new(cli_parsed.clone(), debug_level).unwrap())
-                )
-            },
-            Some(_)=>{
+        match Some(step) {
+            Some("stdio") => pipeline.add_step(Box::new(
+                StdioStep::new(cli_parsed.clone(), debug_level).unwrap(),
+            )),
+            Some(_) => {
                 eprintln!("Unknown step");
                 exit(1);
-            },
+            }
             None => todo!(),
         }
     }
 
-
-    let mut entry = match Some(entry) {
+    match Some(entry) {
         Some("stdio") => {
-            StdioEntry::new(cli_parsed.clone(), pipeline, debug_level)
-        },
-        Some(_)=>{
+            let mut entry = StdioEntry::new(cli_parsed.clone(), pipeline, debug_level).unwrap();
+            entry.listen().unwrap();
+        }
+        Some("tcp") => {
+            let mut entry = TcpEntry::new(cli_parsed.clone(), pipeline, debug_level).unwrap();
+            entry.listen().unwrap();
+        }
+        Some(_) => {
             eprintln!("Unknown entry");
             exit(1);
-        },
+        }
         None => todo!(),
-    }.unwrap();
-
-    entry.listen().unwrap_err();
+    };
 }
