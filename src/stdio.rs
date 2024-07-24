@@ -21,7 +21,7 @@ pub mod stdio {
     };
 
     use crate::{
-        base::base::DebugLevel, BoxedClone, Entry, EntryStatic, Error, Pipeline, Step, StepStatic,
+        base::base::DebugLevel, BoxedClone, Entry, EntryStatic, Error, Pipeline, Step, StepStatic, BUFFER_SIZE,
     };
 
     pub struct StdioEntry {
@@ -149,38 +149,42 @@ pub mod stdio {
     pub struct StdioStep {
         stdout_mode: StdoutMode,
         debug_level: DebugLevel,
+        buffer_size: usize,
     }
 
     impl Step for StdioStep {
         fn process_data_forward(&self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error> {
-            let mut io = stdout();
+            let mut stdout = stdout();
             if self.debug_level as usize > 2 {
-                io.write("\n++++++++++++++++++++++++++++++++++".as_bytes())?;
-                io.write("\nstdio forward : \n".as_bytes())?;
-                io.write(data.as_slice())?;
-                io.write("++++++++++++++++++++++++++++++++++\n".as_bytes())?;
+                stdout.write("\n++++++++++++++++++++++++++++++++++".as_bytes())?;
+                stdout.write("\nstdio forward : \n".as_bytes())?;
+                stdout.write(data.as_slice())?;
+                stdout.write("++++++++++++++++++++++++++++++++++\n".as_bytes())?;
             }
             if self.stdout_mode & StdoutMode::Forward == StdoutMode::Forward
                 && self.debug_level as usize <= 2
             {
-                io.write(data.as_slice())?;
+                stdout.write(data.as_slice())?;
             }
-            Ok(data.clone())
+            let mut stdin = stdin();
+            let mut read_buffer = vec![0u8; self.buffer_size];
+            let read_size = stdin.read(&mut read_buffer)?;
+            Ok(read_buffer[0..read_size].to_vec())
         }
 
         fn process_data_backward(&self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error> {
-            let mut io = stdout();
-            if self.debug_level as usize > 2 {
-                io.write("\n++++++++++++++++++++++++++++++++++\n".as_bytes())?;
-                io.write("\nstdio backward : \n".as_bytes())?;
-                io.write(data.as_slice())?;
-                io.write("++++++++++++++++++++++++++++++++++\n".as_bytes())?;
-            }
-            if self.stdout_mode & StdoutMode::Backward == StdoutMode::Backward
-                && self.debug_level as usize <= 2
-            {
-                io.write(data.as_slice())?;
-            }
+            // let mut io = stdout();
+            // if self.debug_level as usize > 2 {
+            //     io.write("\n++++++++++++++++++++++++++++++++++\n".as_bytes())?;
+            //     io.write("\nstdio backward : \n".as_bytes())?;
+            //     io.write(data.as_slice())?;
+            //     io.write("++++++++++++++++++++++++++++++++++\n".as_bytes())?;
+            // }
+            // if self.stdout_mode & StdoutMode::Backward == StdoutMode::Backward
+            //     && self.debug_level as usize <= 2
+            // {
+            //     io.write(data.as_slice())?;
+            // }
             Ok(data.clone())
         }
     }
@@ -190,6 +194,7 @@ pub mod stdio {
             Box::new(Self {
                 debug_level: self.debug_level.clone(),
                 stdout_mode: self.stdout_mode.clone(),
+                buffer_size: self.buffer_size
             })
         }
     }
@@ -203,9 +208,20 @@ pub mod stdio {
             if args.arguments.contains(BACKWARD_STDOUT_OPTION.0) {
                 stdout_mode = stdout_mode | StdoutMode::Backward;
             }
+            let buffer_size = match args.argument_values.get(BUFFER_SIZE.0) {
+                Some(buffer_size) => buffer_size[0].clone(),
+                None => return Err(Error::RequireOption(BUFFER_SIZE.0.to_string())),
+            };
+
+            let buffer_size = match str::parse::<usize>(buffer_size.as_str()) {
+                Ok(buffer_size) => buffer_size,
+                Err(e) => return Err(Error::ParseIntError),
+            };
+
             Ok(Self {
                 stdout_mode,
                 debug_level,
+                buffer_size
             })
         }
 
@@ -238,6 +254,7 @@ pub mod stdio {
             Self {
                 debug_level: self.debug_level.clone(),
                 stdout_mode: self.stdout_mode.clone(),
+                buffer_size: self.buffer_size
             }
         }
     }
