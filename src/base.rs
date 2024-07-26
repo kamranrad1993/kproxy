@@ -1,9 +1,17 @@
 pub mod base {
     use std::{
-        collections::HashMap, error, io, iter::Rev, net::AddrParseError, ops::{Deref, DerefMut}, result, slice::Iter
+        collections::HashMap,
+        error, io,
+        iter::Rev,
+        net::AddrParseError,
+        ops::{Deref, DerefMut},
+        os::fd::{AsRawFd, RawFd},
+        result,
+        slice::Iter,
     };
 
     use cliparser::types::{CliParsed, CliSpec};
+    use mio::event::Source;
 
     #[derive(Debug)]
     pub enum Error {
@@ -12,7 +20,7 @@ pub mod base {
         Unknown,
         RequireOption(String),
         ParseIntError,
-        AddrParseError(AddrParseError)
+        AddrParseError(AddrParseError),
     }
 
     pub enum DebugLevel {
@@ -28,13 +36,13 @@ pub mod base {
         }
     }
 
-    impl From<AddrParseError> for Error{
+    impl From<AddrParseError> for Error {
         fn from(value: AddrParseError) -> Self {
             Error::AddrParseError(value)
         }
     }
 
-    impl From<i32> for DebugLevel{
+    impl From<i32> for DebugLevel {
         fn from(value: i32) -> Self {
             match value {
                 0 => DebugLevel::None,
@@ -46,7 +54,7 @@ pub mod base {
         }
     }
 
-    pub trait Step: Send + Sync + BoxedClone {
+    pub trait Step: Send + Sync + BoxedClone + AsRawFd {
         fn process_data_forward(&self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error>;
         fn process_data_backward(&self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error>;
     }
@@ -73,18 +81,15 @@ pub mod base {
         }
     }
 
-    pub trait Entry : Sized{
+    pub trait Entry: Sized {
         fn listen(&mut self) -> Result<(), Error>;
     }
 
     pub trait EntryStatic<T>
-    where T: Entry
+    where
+        T: Entry,
     {
-        fn new(
-            args: CliParsed,
-            pipeline: Pipeline,
-            debug_level: DebugLevel,
-        ) -> Result<T, Error>;
+        fn new(args: CliParsed, pipeline: Pipeline, debug_level: DebugLevel) -> Result<T, Error>;
         fn get_cmd(argument: CliSpec) -> CliSpec;
     }
 
@@ -93,16 +98,13 @@ pub mod base {
     }
 
     impl Pipeline {
-        pub fn new()->Self{
-            Pipeline{
-                steps: Vec::new()
-            }
+        pub fn new() -> Self {
+            Pipeline { steps: Vec::new() }
         }
 
-        pub fn add_step(&mut self, step: Box<dyn Step>){
+        pub fn add_step(&mut self, step: Box<dyn Step>) {
             self.steps.push(step);
         }
-
     }
 
     impl Deref for Pipeline {
@@ -143,6 +145,44 @@ pub mod base {
         }
         pub fn iter_backward(&self) -> Rev<Iter<Box<dyn Step>>> {
             self[0..self.len()].iter().rev()
+        }
+    }
+
+    impl AsRawFd for Pipeline {
+        fn as_raw_fd(&self) -> RawFd {
+            self.steps.last().unwrap().as_raw_fd()
+        }
+    }
+
+    impl Source for Pipeline {
+        fn register(
+            &mut self,
+            registry: &mio::Registry,
+            token: mio::Token,
+            interests: mio::Interest,
+        ) -> io::Result<()> {
+            registry.register(
+                &mut mio::unix::SourceFd(&self.as_raw_fd()),
+                token,
+                interests,
+            )
+        }
+
+        fn reregister(
+            &mut self,
+            registry: &mio::Registry,
+            token: mio::Token,
+            interests: mio::Interest,
+        ) -> io::Result<()> {
+            registry.reregister(
+                &mut mio::unix::SourceFd(&self.as_raw_fd()),
+                token,
+                interests,
+            )
+        }
+
+        fn deregister(&mut self, registry: &mio::Registry) -> io::Result<()> {
+            registry.deregister(&mut mio::unix::SourceFd(&self.as_raw_fd()))
         }
     }
 }

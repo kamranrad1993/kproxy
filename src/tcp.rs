@@ -1,7 +1,12 @@
 pub mod tcp {
+    use std::borrow::BorrowMut;
     use std::collections::HashMap;
-    use std::io::Read;
+    use std::io::{Read, Write};
+    use std::os::fd::AsRawFd;
     use std::os::unix::net::SocketAddr;
+    use std::rc::Rc;
+    use std::sync::Arc;
+    use std::time::Duration;
     use std::vec;
 
     use cliparser::types::{
@@ -33,7 +38,7 @@ pub mod tcp {
         port: u16,
         debug_level: DebugLevel,
         pipeline_template: Pipeline,
-        connections: HashMap<Token, (TcpStream, Pipeline, Vec<u8>)>,
+        connections: HashMap<Token, Box<(TcpStream, Pipeline, Vec<u8>)>>,
         buffer_size: usize,
     }
 
@@ -49,21 +54,33 @@ pub mod tcp {
             let mut connection_counter = 0;
 
             loop {
-                poll.poll(&mut events, None)?;
+                poll.poll(&mut events, Some(Duration::from_millis(10)))?;
                 for event in events.iter() {
                     match event.token() {
                         SERVER_TOKEN => {
                             let mut connection = server.accept()?;
+
+                            let mut client = Box::new((connection.0, self.pipeline_template.clone(), vec![0u8; 0]));
+
                             connection_counter += 1;
                             let token = Token(connection_counter);
+                            connection_counter += 1;
+                            let pipeline_token = Token(connection_counter);
+
                             poll.registry().register(
-                                &mut connection.0,
+                                &mut client.as_mut().0,
                                 token,
                                 Interest::READABLE | Interest::WRITABLE,
                             )?;
+                            poll.registry().register(
+                                &mut client.as_mut().1,
+                                pipeline_token,
+                                Interest::READABLE | Interest::WRITABLE,
+                            )?;
+
                             self.connections.insert(
                                 token,
-                                (connection.0, self.pipeline_template.clone(), vec![0u8; 0]),
+                                client,
                             );
                             // drop(connection);
                         }
@@ -80,9 +97,9 @@ pub mod tcp {
                                 TcpEntry::read_client(self.buffer_size, client)?;
                             }
 
-                            if event.is_writable() {
-                                TcpEntry::write_client(client)?;
-                            }
+                            // if event.is_writable() {
+                            //     TcpEntry::write_client(client)?;
+                            // }
                         }
                         _ => unreachable!(),
                     }
@@ -168,6 +185,7 @@ pub mod tcp {
             for step in client.1.iter_backward() {
                 client.2 = step.process_data_backward(&mut client.2)?;
             }
+            client.0.write(client.2.as_slice())?;
             client.2.clear();
             Ok(())
         }
@@ -205,6 +223,12 @@ pub mod tcp {
 
     impl Clone for TcpStep {
         fn clone(&self) -> Self {
+            todo!()
+        }
+    }
+
+    impl AsRawFd for TcpStep{
+        fn as_raw_fd(&self) -> std::os::unix::prelude::RawFd {
             todo!()
         }
     }

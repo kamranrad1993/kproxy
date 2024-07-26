@@ -2,7 +2,7 @@ pub mod stdio {
     use std::{
         fmt::Display,
         io::{stdin, stdout, Read, Write},
-        ops::{BitAnd, BitOr},
+        ops::{BitAnd, BitOr}, os::fd::AsRawFd,
     };
 
     const FORWARD_STDOUT_OPTION: (&str, &str, &str) = (
@@ -21,7 +21,7 @@ pub mod stdio {
     };
 
     use crate::{
-        base::base::DebugLevel, BoxedClone, Entry, EntryStatic, Error, Pipeline, Step, StepStatic, BUFFER_SIZE,
+        base::base::DebugLevel, BoxedClone, Entry, EntryStatic, Error, Pipeline, Step, StepStatic, TcpStep, BUFFER_SIZE
     };
 
     pub struct StdioEntry {
@@ -166,26 +166,26 @@ pub mod stdio {
             {
                 stdout.write(data.as_slice())?;
             }
+            Ok(data.clone())
+        }
+
+        fn process_data_backward(&self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error> {
+            let mut io = stdout();
+            if self.debug_level as usize > 2 {
+                io.write("\n++++++++++++++++++++++++++++++++++\n".as_bytes())?;
+                io.write("\nstdio backward : \n".as_bytes())?;
+                io.write(data.as_slice())?;
+                io.write("++++++++++++++++++++++++++++++++++\n".as_bytes())?;
+            }
+            if self.stdout_mode & StdoutMode::Backward == StdoutMode::Backward
+                && self.debug_level as usize <= 2
+            {
+                io.write(data.as_slice())?;
+            }
             let mut stdin = stdin();
             let mut read_buffer = vec![0u8; self.buffer_size];
             let read_size = stdin.read(&mut read_buffer)?;
             Ok(read_buffer[0..read_size].to_vec())
-        }
-
-        fn process_data_backward(&self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error> {
-            // let mut io = stdout();
-            // if self.debug_level as usize > 2 {
-            //     io.write("\n++++++++++++++++++++++++++++++++++\n".as_bytes())?;
-            //     io.write("\nstdio backward : \n".as_bytes())?;
-            //     io.write(data.as_slice())?;
-            //     io.write("++++++++++++++++++++++++++++++++++\n".as_bytes())?;
-            // }
-            // if self.stdout_mode & StdoutMode::Backward == StdoutMode::Backward
-            //     && self.debug_level as usize <= 2
-            // {
-            //     io.write(data.as_slice())?;
-            // }
-            Ok(data.clone())
         }
     }
 
@@ -256,6 +256,12 @@ pub mod stdio {
                 stdout_mode: self.stdout_mode.clone(),
                 buffer_size: self.buffer_size
             }
+        }
+    }
+
+    impl AsRawFd for StdioStep{
+        fn as_raw_fd(&self) -> std::os::unix::prelude::RawFd {
+            stdin().as_raw_fd()
         }
     }
 }
