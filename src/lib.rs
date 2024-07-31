@@ -1,8 +1,11 @@
 pub const BUFFER_SIZE : (&str, &str, &str, &str)= ("BufferSize", "--buffer-size", "-b", "Maximum buffer size");
 
+mod data_structures;
+pub use data_structures::multi_key_map::{MultiMap, Ref};
+
 mod base;
 use std::{
-    net::{IpAddr, SocketAddr, ToSocketAddrs}, ops::Deref, str::FromStr
+    net::{IpAddr, SocketAddr, ToSocketAddrs}, str::FromStr
 };
 
 pub use base::base::{

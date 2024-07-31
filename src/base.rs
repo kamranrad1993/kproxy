@@ -143,8 +143,25 @@ pub mod base {
         pub fn iter_forwad(&self) -> Iter<Box<dyn Step>> {
             self.iter()
         }
+
         pub fn iter_backward(&self) -> Rev<Iter<Box<dyn Step>>> {
             self[0..self.len()].iter().rev()
+        }
+    
+        pub fn read_pipeline(&self) -> Result<Vec<u8>, Error> {
+            let mut buffer: Vec<u8> = vec![0u8; 0];
+            for step in self.iter_backward() {
+                buffer = step.process_data_backward(&mut buffer)?;
+            }
+            Ok(buffer)
+        }
+
+        pub fn write_pipeline(&self, mut buffer: Vec<u8>) -> Result<(), Error> {
+            for step in self.iter_forwad() {
+                buffer = step.process_data_forward(buffer.to_vec().as_mut())?;
+            }
+            buffer.clear();
+            Ok(())
         }
     }
 

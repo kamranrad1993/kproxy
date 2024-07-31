@@ -3,9 +3,6 @@ pub mod tcp {
     use std::collections::HashMap;
     use std::io::{Read, Write};
     use std::os::fd::AsRawFd;
-    use std::os::unix::net::SocketAddr;
-    use std::rc::Rc;
-    use std::sync::Arc;
     use std::time::Duration;
     use std::vec;
 
@@ -18,7 +15,7 @@ pub mod tcp {
     use crate::{
         base::base::DebugLevel, BoxedClone, Entry, EntryStatic, Error, Pipeline, Step, StepStatic,
     };
-    use crate::{create_socket_addr, BUFFER_SIZE};
+    use crate::{create_socket_addr, MultiMap, Ref, BUFFER_SIZE};
 
     const TCP_ENTRY_ADDRESS: (&str, &str, &str) = (
         "tcp-entry-address",
@@ -38,8 +35,15 @@ pub mod tcp {
         port: u16,
         debug_level: DebugLevel,
         pipeline_template: Pipeline,
-        connections: HashMap<Token, Box<(TcpStream, Pipeline, Vec<u8>)>>,
+        connections: MultiMap<Token, Ref<TcpEntryContext>>,
         buffer_size: usize,
+    }
+
+    struct TcpEntryContext {
+        connection: TcpStream,
+        pipeline: Pipeline,
+        connection_buf: Vec<u8>,
+        pipeline_buf: Vec<u8>,
     }
 
     impl Entry for TcpEntry {
@@ -60,28 +64,35 @@ pub mod tcp {
                         SERVER_TOKEN => {
                             let mut connection = server.accept()?;
 
-                            let mut client = Box::new((connection.0, self.pipeline_template.clone(), vec![0u8; 0]));
+                            let mut client = Ref::new(TcpEntryContext {
+                                connection: connection.0,
+                                pipeline: self.pipeline_template.clone(),
+                                connection_buf: vec![0u8; 0],
+                                pipeline_buf: vec![0u8; 0],
+                            });
 
                             connection_counter += 1;
                             let token = Token(connection_counter);
                             connection_counter += 1;
                             let pipeline_token = Token(connection_counter);
 
-                            poll.registry().register(
-                                &mut client.as_mut().0,
-                                token,
-                                Interest::READABLE | Interest::WRITABLE,
-                            )?;
-                            poll.registry().register(
-                                &mut client.as_mut().1,
-                                pipeline_token,
-                                Interest::READABLE | Interest::WRITABLE,
-                            )?;
+                            poll.registry()
+                                .register(
+                                    &mut client.connection,
+                                    token,
+                                    Interest::READABLE | Interest::WRITABLE,
+                                )
+                                .unwrap();
+                            poll.registry()
+                                .register(
+                                    &mut client.pipeline,
+                                    pipeline_token,
+                                    Interest::READABLE | Interest::WRITABLE,
+                                )
+                                .unwrap();
 
-                            self.connections.insert(
-                                token,
-                                client,
-                            );
+                            self.connections.insert(token, client.clone());
+                            self.connections.insert(pipeline_token, client);
                             // drop(connection);
                         }
                         other => {
@@ -93,18 +104,62 @@ pub mod tcp {
                                 }
                             };
 
-                            if event.is_readable() {
-                                TcpEntry::read_client(self.buffer_size, client)?;
-                            }
+                            match other.0 % 2 {
+                                0 => {
+                                    // TcpEntry::write_client(client)?;
+                                    if event.is_readable() {
+                                        TcpEntry::read_pipeline(client)?;
+                                    }
 
-                            // if event.is_writable() {
-                            //     TcpEntry::write_client(client)?;
-                            // }
+                                    if event.is_writable() {
+                                        TcpEntry::write_pipeline(client)?;
+                                    }
+                                }
+                                1 => {
+                                    if event.is_readable() {
+                                        TcpEntry::read_client(self.buffer_size, client)?;
+                                    }
+
+                                    if event.is_writable() {
+                                        TcpEntry::write_client(client)?;
+                                    }
+                                }
+                                _ => unreachable!(),
+                            }
                         }
                         _ => unreachable!(),
                     }
                 }
             }
+        }
+    }
+
+    impl TcpEntry {
+        fn read_client(buffer_size: usize, client: &mut TcpEntryContext) -> Result<(), Error> {
+            let mut buffer = vec![0u8; buffer_size];
+            let size = client.connection.read(&mut buffer)?;
+            // for step in client.pipeline.iter_forwad() {
+            //     buffer = step.process_data_forward(buffer[0..size].to_vec().as_mut())?;
+            // }
+            client.connection_buf.extend(buffer[0..size].to_vec());
+            Ok(())
+        }
+
+        fn read_pipeline(client: &mut TcpEntryContext) -> Result<(), Error> {
+            client.pipeline_buf.extend(client.pipeline.read_pipeline()?);
+            Ok(())
+        }
+
+        fn write_client(client: &mut TcpEntryContext) -> Result<(), Error> {
+            client.connection.write(client.pipeline_buf.as_slice())?;
+            client.pipeline_buf.clear();
+            Ok(())
+        }
+
+        fn write_pipeline(client: &mut TcpEntryContext) -> Result<(), Error> {
+            client.pipeline.write_pipeline(client.connection_buf.clone())?;
+            client.connection_buf.clear();
+            Ok(())
         }
     }
 
@@ -141,7 +196,7 @@ pub mod tcp {
                 port,
                 debug_level,
                 pipeline_template: pipeline,
-                connections: HashMap::new(),
+                connections: MultiMap::new(),
                 buffer_size,
             })
         }
@@ -164,30 +219,6 @@ pub mod tcp {
                 help: Some(ArgumentHelp::Text(TCP_ENTRY_PORT.2.to_string())),
             });
             argument
-        }
-    }
-
-    impl TcpEntry {
-        fn read_client(
-            buffer_size: usize,
-            client: &mut (TcpStream, Pipeline, Vec<u8>),
-        ) -> Result<(), Error> {
-            let mut buffer = vec![0u8; buffer_size];
-            let size = client.0.read(&mut buffer)?;
-            for step in client.1.iter_forwad() {
-                buffer = step.process_data_forward(buffer[0..size].to_vec().as_mut())?;
-            }
-            client.2.extend(buffer);
-            Ok(())
-        }
-
-        fn write_client(client: &mut (TcpStream, Pipeline, Vec<u8>)) -> Result<(), Error> {
-            for step in client.1.iter_backward() {
-                client.2 = step.process_data_backward(&mut client.2)?;
-            }
-            client.0.write(client.2.as_slice())?;
-            client.2.clear();
-            Ok(())
         }
     }
 
@@ -227,7 +258,7 @@ pub mod tcp {
         }
     }
 
-    impl AsRawFd for TcpStep{
+    impl AsRawFd for TcpStep {
         fn as_raw_fd(&self) -> std::os::unix::prelude::RawFd {
             todo!()
         }
