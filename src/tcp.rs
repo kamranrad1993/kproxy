@@ -106,7 +106,7 @@ pub mod tcp {
 
                             match other.0 % 2 {
                                 0 => {
-                                    // TcpEntry::write_client(client)?;
+                                    // pipeline has io event
                                     if event.is_readable() {
                                         TcpEntry::read_pipeline(client)?;
                                     }
@@ -116,6 +116,7 @@ pub mod tcp {
                                     }
                                 }
                                 1 => {
+                                    // client has io event
                                     if event.is_readable() {
                                         TcpEntry::read_client(self.buffer_size, client)?;
                                     }
@@ -138,9 +139,6 @@ pub mod tcp {
         fn read_client(buffer_size: usize, client: &mut TcpEntryContext) -> Result<(), Error> {
             let mut buffer = vec![0u8; buffer_size];
             let size = client.connection.read(&mut buffer)?;
-            // for step in client.pipeline.iter_forwad() {
-            //     buffer = step.process_data_forward(buffer[0..size].to_vec().as_mut())?;
-            // }
             client.connection_buf.extend(buffer[0..size].to_vec());
             Ok(())
         }
@@ -151,14 +149,20 @@ pub mod tcp {
         }
 
         fn write_client(client: &mut TcpEntryContext) -> Result<(), Error> {
-            client.connection.write(client.pipeline_buf.as_slice())?;
-            client.pipeline_buf.clear();
+            if client.pipeline_buf.len() > 0 {
+                client.connection.write(client.pipeline_buf.as_slice())?;
+                // client.pipeline_buf.clear();
+            }
             Ok(())
         }
 
         fn write_pipeline(client: &mut TcpEntryContext) -> Result<(), Error> {
-            client.pipeline.write_pipeline(client.connection_buf.clone())?;
-            client.connection_buf.clear();
+            if client.connection_buf.len() > 0 {
+                client
+                    .pipeline
+                    .write_pipeline(client.connection_buf.clone())?;
+                // client.connection_buf.clear();
+            }
             Ok(())
         }
     }

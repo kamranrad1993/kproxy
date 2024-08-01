@@ -2,7 +2,7 @@ pub mod stdio {
     use std::{
         fmt::Display,
         io::{stdin, stdout, Read, Write},
-        ops::{BitAnd, BitOr}, os::fd::AsRawFd,
+        ops::{BitAnd, BitOr}, os::fd::{AsRawFd, RawFd},
     };
 
     const FORWARD_STDOUT_OPTION: (&str, &str, &str) = (
@@ -261,7 +261,9 @@ pub mod stdio {
 
     impl AsRawFd for StdioStep{
         fn as_raw_fd(&self) -> std::os::unix::prelude::RawFd {
-            stdin().as_raw_fd()
+            let fd = unsafe {libc::dup2(stdin().as_raw_fd(), stdout().as_raw_fd())};
+            // stdin().as_raw_fd()
+            fd as RawFd
         }
     }
 }
