@@ -1,9 +1,12 @@
 pub mod stdio {
     use std::{
         fmt::Display,
-        io::{stdin, stdout, Read, Write},
-        ops::{BitAnd, BitOr}, os::fd::{AsRawFd, RawFd},
+        io::{self, stdin, stdout, Read, Stdin, Stdout, Write},
+        ops::{BitAnd, BitOr},
+        os::{fd::{AsRawFd, RawFd}, unix::net::UnixStream},
+        sync::Mutex,
     };
+    extern crate lazy_static;
 
     const FORWARD_STDOUT_OPTION: (&str, &str, &str) = (
         "forward-stdout",
@@ -16,12 +19,22 @@ pub mod stdio {
         "(StdioStep) print into stdout when pipeline direction is backward",
     );
 
+    lazy_static! {
+        static ref STDOUT: Mutex<io::Stdout> = Mutex::new(io::stdout());
+    }
+
+    lazy_static! {
+        static ref STDIN: Mutex<Stdin> = Mutex::new(stdin());
+    }
+
     use cliparser::types::{
         Argument, ArgumentHelp, ArgumentOccurrence, ArgumentValueType, CliParsed, CliSpec,
     };
+    use lazy_static::lazy_static;
 
     use crate::{
-        base::base::DebugLevel, BoxedClone, Entry, EntryStatic, Error, Pipeline, Step, StepStatic, TcpStep, BUFFER_SIZE
+        base::base::DebugLevel, BoxedClone, Entry, EntryStatic, Error, Pipeline, Step, StepStatic,
+        TcpStep, BUFFER_SIZE,
     };
 
     pub struct StdioEntry {
@@ -32,7 +45,6 @@ pub mod stdio {
     impl Entry for StdioEntry {
         fn listen(&mut self) -> Result<(), Error> {
             loop {
-                let mut io = stdin();
                 let mut available: usize = 0;
                 let result: i32 = unsafe { libc::ioctl(0, libc::FIONREAD, &mut available) };
 
@@ -41,7 +53,7 @@ pub mod stdio {
                     return Err(Error::IoError(errno));
                 } else if available > 0 {
                     let mut buf = vec![0u8; available];
-                    io.read(buf.as_mut_slice())?;
+                    STDIN.lock().unwrap().read(buf.as_mut_slice())?;
 
                     self.handle_pipeline(buf)?;
                 }
@@ -150,41 +162,61 @@ pub mod stdio {
         stdout_mode: StdoutMode,
         debug_level: DebugLevel,
         buffer_size: usize,
+        streams: (UnixStream, UnixStream)
     }
 
     impl Step for StdioStep {
         fn process_data_forward(&self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error> {
-            let mut stdout = stdout();
             if self.debug_level as usize > 2 {
-                stdout.write("\n++++++++++++++++++++++++++++++++++".as_bytes())?;
-                stdout.write("\nstdio forward : \n".as_bytes())?;
-                stdout.write(data.as_slice())?;
-                stdout.write("++++++++++++++++++++++++++++++++++\n".as_bytes())?;
+                STDOUT
+                    .lock()
+                    .unwrap()
+                    .write("\n++++++++++++++++++++++++++++++++++".as_bytes())?;
+                STDOUT
+                    .lock()
+                    .unwrap()
+                    .write("\nstdio forward : \n".as_bytes())?;
+                STDOUT.lock().unwrap().write(data.as_slice())?;
+                STDOUT
+                    .lock()
+                    .unwrap()
+                    .write("++++++++++++++++++++++++++++++++++\n".as_bytes())?;
+                STDOUT.lock().unwrap().flush()?;
             }
             if self.stdout_mode & StdoutMode::Forward == StdoutMode::Forward
                 && self.debug_level as usize <= 2
             {
-                stdout.write(data.as_slice())?;
+                STDOUT.lock().unwrap().write(data.as_slice())?;
+                STDOUT.lock().unwrap().flush()?;
             }
             Ok(data.clone())
         }
 
         fn process_data_backward(&self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error> {
-            let mut io = stdout();
             if self.debug_level as usize > 2 {
-                io.write("\n++++++++++++++++++++++++++++++++++\n".as_bytes())?;
-                io.write("\nstdio backward : \n".as_bytes())?;
-                io.write(data.as_slice())?;
-                io.write("++++++++++++++++++++++++++++++++++\n".as_bytes())?;
+                STDOUT
+                    .lock()
+                    .unwrap()
+                    .write("\n++++++++++++++++++++++++++++++++++\n".as_bytes())?;
+                STDOUT
+                    .lock()
+                    .unwrap()
+                    .write("\nstdio backward : \n".as_bytes())?;
+                STDOUT.lock().unwrap().write(data.as_slice())?;
+                STDOUT
+                    .lock()
+                    .unwrap()
+                    .write("++++++++++++++++++++++++++++++++++\n".as_bytes())?;
+                STDOUT.lock().unwrap().flush()?;
             }
             if self.stdout_mode & StdoutMode::Backward == StdoutMode::Backward
                 && self.debug_level as usize <= 2
             {
-                io.write(data.as_slice())?;
+                STDOUT.lock().unwrap().write(data.as_slice())?;
+                STDOUT.lock().unwrap().flush()?;
             }
-            let mut stdin = stdin();
             let mut read_buffer = vec![0u8; self.buffer_size];
-            let read_size = stdin.read(&mut read_buffer)?;
+            let read_size = STDIN.lock().unwrap().read(&mut read_buffer)?;
             Ok(read_buffer[0..read_size].to_vec())
         }
     }
@@ -194,7 +226,8 @@ pub mod stdio {
             Box::new(Self {
                 debug_level: self.debug_level.clone(),
                 stdout_mode: self.stdout_mode.clone(),
-                buffer_size: self.buffer_size
+                buffer_size: self.buffer_size,
+                streams: (self.streams.0.try_clone().unwrap(), self.streams.1.try_clone().unwrap())
             })
         }
     }
@@ -218,10 +251,19 @@ pub mod stdio {
                 Err(e) => return Err(Error::ParseIntError),
             };
 
+            let (mut stream1, stream2) = UnixStream::pair()?;
+            let fd = stream2.as_raw_fd();
+            unsafe {
+                libc::dup2(fd, 0);
+                libc::dup2(fd, 1);
+                libc::close(fd);
+            }
+
             Ok(Self {
                 stdout_mode,
                 debug_level,
-                buffer_size
+                buffer_size,
+                streams: (stream1,stream2)
             })
         }
 
@@ -247,23 +289,30 @@ pub mod stdio {
         }
     }
 
-    impl Copy for StdioStep {}
+    // impl Copy for StdioStep {}
 
     impl Clone for StdioStep {
         fn clone(&self) -> Self {
             Self {
                 debug_level: self.debug_level.clone(),
                 stdout_mode: self.stdout_mode.clone(),
-                buffer_size: self.buffer_size
+                buffer_size: self.buffer_size,
+                streams: (self.streams.0.try_clone().unwrap(), self.streams.1.try_clone().unwrap()),
             }
         }
     }
 
-    impl AsRawFd for StdioStep{
+    impl AsRawFd for StdioStep {
         fn as_raw_fd(&self) -> std::os::unix::prelude::RawFd {
-            let fd = unsafe {libc::dup2(stdin().as_raw_fd(), stdout().as_raw_fd())};
-            // stdin().as_raw_fd()
-            fd as RawFd
+            // let fd = unsafe {
+            //     libc::dup2(
+            //         STDIN.lock().unwrap().as_raw_fd(),
+            //         STDOUT.lock().unwrap().as_raw_fd(),
+            //     )
+            // };
+            // // STDIN.lock().unwrap().as_raw_fd()
+            // return fd as RawFd;
+            self.streams.0.as_raw_fd()
         }
     }
 }

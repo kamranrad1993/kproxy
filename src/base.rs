@@ -63,7 +63,7 @@ pub mod base {
         fn bclone(&self) -> Box<dyn Step>;
     }
 
-    pub trait StepStatic: Copy + Clone {
+    pub trait StepStatic: Clone {
         fn new(args: CliParsed, debug_level: DebugLevel) -> Result<Self, Error>;
         fn get_cmd(argument: CliSpec) -> CliSpec;
     }

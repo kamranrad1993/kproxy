@@ -18,8 +18,8 @@
             },
             // "args": "-e stdio -s stdio --forward-stdout",
             // "args": "-e stdio -s stdio -s stdio -s stdio --backward-stdout",
-            // "args": "-d 3 -e tcp -s stdio --tcp-ep 6666",
-            "args": "-e tcp -s stdio --tcp-ep 6666 --backward-stdout",
+            "args": "-d 3 -e tcp -s stdio --tcp-ep 6666",
+            // "args": "-e tcp -s stdio --tcp-ep 6666 --backward-stdout",
         }
     ]
 }
