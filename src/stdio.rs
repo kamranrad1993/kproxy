@@ -12,6 +12,18 @@ pub mod stdio {
     };
     extern crate lazy_static;
 
+    use cliparser::types::{
+        Argument, ArgumentHelp, ArgumentOccurrence, ArgumentValueType, CliParsed, CliSpec,
+    };
+    use lazy_static::lazy_static;
+    use mio::{event::Source, unix::SourceFd, Events, Interest, Poll, Token};
+    // use mio::{Events, Interest, Poll, Token};
+
+    use crate::{
+        base::base::DebugLevel, BoxedClone, Entry, EntryStatic, Error, Pipeline, Step, StepStatic,
+        TcpStep, BUFFER_SIZE,
+    };
+
     const FORWARD_STDOUT_OPTION: (&str, &str, &str) = (
         "forward-stdout",
         "--forward-stdout",
@@ -31,16 +43,8 @@ pub mod stdio {
         static ref STDIN: Mutex<Stdin> = Mutex::new(stdin());
     }
 
-    use cliparser::types::{
-        Argument, ArgumentHelp, ArgumentOccurrence, ArgumentValueType, CliParsed, CliSpec,
-    };
-    use lazy_static::lazy_static;
-    // use mio::{Events, Interest, Poll, Token};
-
-    use crate::{
-        base::base::DebugLevel, BoxedClone, Entry, EntryStatic, Error, Pipeline, Step, StepStatic,
-        TcpStep, BUFFER_SIZE,
-    };
+    const STDIN_TOKEN: Token = Token(0);
+    const PIPELINE_TOKEN: Token = Token(1);
 
     pub struct StdioEntry {
         pipeline: Pipeline,
@@ -50,49 +54,35 @@ pub mod stdio {
 
     impl Entry for StdioEntry {
         fn listen(&mut self) -> Result<(), Error> {
-            // let mut poll = Poll::new()?;
-            // let mut events = Events::with_capacity(128);
-            // poll.registry().register(
-            //     &mut mio::unix::SourceFd(&stdin().as_raw_fd()),
-            //     Token(0),
-            //     Interest::READABLE,
-            // )?;
+            let mut poll = Poll::new()?;
+            let mut events = Events::with_capacity(128);
+            let fd = STDIN.lock().unwrap().as_raw_fd();
+            let mut fd = SourceFd(&fd);
+            poll.registry()
+                .register(&mut fd, STDIN_TOKEN, Interest::READABLE)?;
+            let mut connection_counter = 0;
 
-            // loop {
-            //     poll.poll(&mut events,Some(Duration::from_millis(10)))?;
-            //     for event in events.iter() {
-            //         match event.token() {
-            //             Token(0) => {
-            //                 let mut buf = vec![0u8; self.buffer_size];
-            //                 let size = STDIN.lock().unwrap().read(buf.as_mut_slice())?;
-
-            //                 self.handle_pipeline(buf[0..size].to_vec())?;
-            //             }
-            //             _ => unreachable!(),
-            //         }
-            //     }
-            // }
-
-            // loop {
-            //     let mut available: usize = 0;
-            //     let result: i32 = unsafe { libc::ioctl(0, libc::FIONREAD, &mut available) };
-
-            //     if result == -1 {
-            //         let errno = std::io::Error::last_os_error();
-            //         return Err(Error::IoError(errno));
-            //     } else if available > 0 {
-            //         let mut buf = vec![0u8; available];
-            //         STDIN.lock().unwrap().read(buf.as_mut_slice())?;
-
-            //         self.handle_pipeline(buf)?;
-            //     }
-            // }
-
+            let mut buf = vec![0u8; self.buffer_size];
+            let mut buf_fill_size = 0;
             loop {
-                let mut buf = vec![0u8; self.buffer_size];
-                let size = STDIN.lock().unwrap().read(buf.as_mut_slice())?;
-
-                self.handle_pipeline(buf[0..size].to_vec())?;
+                poll.poll(&mut events, None)?;
+                for event in events.iter() {
+                    match event.token() {
+                        STDIN_TOKEN => {
+                            buf_fill_size = STDIN.lock().unwrap().read(buf.as_mut_slice())?;
+                        }
+                        PIPELINE_TOKEN => {
+                            if event.is_readable() {
+                                let data = self.pipeline.read_pipeline()?;
+                            }
+                            if event.is_writable() {
+                                self.pipeline.write_pipeline(buf)?;
+                                buf.clear();
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                }
             }
         }
     }
@@ -213,7 +203,7 @@ pub mod stdio {
     }
 
     impl Step for StdioStep {
-        fn process_data_forward(&self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error> {
+        fn process_data_forward(&mut self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error> {
             if self.debug_level as usize > 2 {
                 STDOUT
                     .lock()
@@ -239,7 +229,7 @@ pub mod stdio {
             Ok(data.clone())
         }
 
-        fn process_data_backward(&self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error> {
+        fn process_data_backward(&mut self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error> {
             if self.debug_level as usize > 2 {
                 STDOUT
                     .lock()

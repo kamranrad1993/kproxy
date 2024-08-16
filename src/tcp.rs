@@ -2,12 +2,13 @@ pub mod tcp {
     // use polling::{Event, Events, PollMode, Poller};
     use std::io::{ErrorKind, Read, Write};
     // use std::net::{TcpListener, TcpStream};
-    use std::os::fd::AsRawFd;
-    use std::vec;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::{result, string, vec};
 
     use cliparser::types::{
         Argument, ArgumentHelp, ArgumentOccurrence, ArgumentValueType, CliParsed, CliSpec,
     };
+    use libc::sock_filter;
     use mio::net::{TcpListener, TcpStream};
     use mio::{Events, Interest, Poll, Token};
 
@@ -25,6 +26,17 @@ pub mod tcp {
         "tcp-entry-port",
         "--tcp-ep",
         "(TcpEntry) Tcp Entry listen port",
+    );
+
+    const TCP_STEP_ADDRESS: (&str, &str, &str) = (
+        "tcp-step-address",
+        "--tcp-sa",
+        "(TcpEntry) Tcp step endpoint address",
+    );
+    const TCP_STEP_PORT: (&str, &str, &str) = (
+        "tcp-step-port",
+        "--tcp-sp",
+        "(TcpEntry) Tcp step endpoint port",
     );
 
     const SERVER_TOKEN: Token = Token(0);
@@ -70,6 +82,13 @@ pub mod tcp {
                                 pipeline_buf: vec![0u8; 0],
                             });
 
+                            {
+                                // debug
+                                if self.debug_level >= 2 {
+                                    println!("new client: {}", connection.1);
+                                }
+                            }
+
                             connection_counter += 1;
                             let token = Token(connection_counter);
                             poll.registry()
@@ -85,8 +104,6 @@ pub mod tcp {
                             poll.registry()
                                 .register(
                                     &mut client.pipeline,
-                                    // &mut mio::unix::SourceFd(&client.pipeline.as_raw_fd()),
-                                    // &mut mio::unix::SourceFd(&std::io::stdin().as_raw_fd()),
                                     pipeline_token,
                                     Interest::READABLE | Interest::WRITABLE,
                                 )
@@ -100,7 +117,9 @@ pub mod tcp {
                             let client = match self.connections.get_mut(&other) {
                                 Some(client) => client,
                                 None => {
-                                    eprintln!("No client found with this token {}", other.0);
+                                    if self.debug_level > 0 {
+                                        eprintln!("No client found with this token {}", other.0);
+                                    }
                                     continue;
                                 }
                             };
@@ -108,7 +127,6 @@ pub mod tcp {
                             match other.0 % 2 {
                                 0 => {
                                     // pipeline has io event
-
                                     if event.is_readable() {
                                         if let Err(e) = TcpEntry::read_pipeline(client) {
                                             match e {
@@ -117,16 +135,35 @@ pub mod tcp {
                                                         continue;
                                                     }
                                                 }
-                                                _ => {}
+                                                _ => {
+                                                    if self.debug_level > 0 {
+                                                        eprintln!(
+                                                            "an error accured reading pipeline: {}",
+                                                            e
+                                                        );
+                                                    }
+                                                }
                                             }
                                         }
-                                        TcpEntry::write_client(client).unwrap();
+
+                                        if let Err(e) = TcpEntry::write_client(client) {
+                                            if self.debug_level > 0 {
+                                                eprintln!("an error accured writing client: {}", e);
+                                            }
+                                        }
                                     }
                                 }
                                 1 => {
                                     // client has io event
                                     if event.is_readable() {
-                                        TcpEntry::read_client(self.buffer_size, client).unwrap();
+                                        if let Err(e) =
+                                            TcpEntry::read_client(self.buffer_size, client)
+                                        {
+                                            if self.debug_level > 0 {
+                                                eprintln!("an error accured reading client: {}", e);
+                                            }
+                                        }
+
                                         if let Err(e) = TcpEntry::write_pipeline(client) {
                                             match e {
                                                 Error::IoError(e) => {
@@ -134,7 +171,14 @@ pub mod tcp {
                                                         continue;
                                                     }
                                                 }
-                                                _ => {}
+                                                _ => {
+                                                    if self.debug_level > 0 {
+                                                        eprintln!(
+                                                            "an error accured writing pipeline: {}",
+                                                            e
+                                                        );
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -239,45 +283,113 @@ pub mod tcp {
         }
     }
 
-    pub struct TcpStep {}
+    pub struct TcpStep {
+        address: String,
+        port: u16,
+        connection: TcpStream,
+        debug_level: DebugLevel,
+        buffer_size: usize,
+    }
+
+    impl TcpStep {}
 
     impl Step for TcpStep {
-        fn process_data_forward(&self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error> {
-            todo!()
+        fn process_data_forward(&mut self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error> {
+            self.connection.write(&data)?;
+            Ok(data.clone())
         }
 
-        fn process_data_backward(&self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error> {
-            todo!()
+        fn process_data_backward(&mut self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error> {
+            let mut read_buffer = vec![0u8; self.buffer_size];
+            let read_size = self.connection.read(&mut read_buffer)?;
+            Ok(read_buffer[0..read_size].to_vec())
         }
     }
 
     impl BoxedClone for TcpStep {
         fn bclone(&self) -> Box<dyn Step> {
-            todo!()
+            Box::new(Self {
+                address: self.address.clone(),
+                port: self.port.clone(),
+                connection: unsafe { TcpStream::from_raw_fd(self.connection.as_raw_fd()) },
+                debug_level: self.debug_level,
+                buffer_size: self.buffer_size,
+            })
         }
     }
 
     impl StepStatic for TcpStep {
         fn new(args: CliParsed, debug_level: DebugLevel) -> Result<Self, Error> {
-            todo!()
+            let address = match args.argument_values.get(TCP_STEP_ADDRESS.0) {
+                Some(address) => address[0].clone(),
+                None => return Err(Error::RequireOption(TCP_STEP_ADDRESS.0.to_string())),
+            };
+            let port = match args.argument_values.get(TCP_STEP_PORT.0) {
+                Some(port) => port[0].clone(),
+                None => return Err(Error::RequireOption(TCP_STEP_PORT.0.to_string())),
+            };
+            let buffer_size = match args.argument_values.get(BUFFER_SIZE.0) {
+                Some(buffer_size) => buffer_size[0].clone(),
+                None => return Err(Error::RequireOption(BUFFER_SIZE.0.to_string())),
+            };
+
+            let port = match str::parse::<u16>(port.as_str()) {
+                Ok(port) => port,
+                Err(e) => return Err(Error::ParseIntError),
+            };
+            let buffer_size = match str::parse::<usize>(buffer_size.as_str()) {
+                Ok(buffer_size) => buffer_size,
+                Err(e) => return Err(Error::ParseIntError),
+            };
+
+            let addr = create_socket_addr(address.as_str(), port)?;
+            let connection = TcpStream::connect(addr)?;
+
+            Ok(Self {
+                address: address,
+                port: port,
+                connection: connection,
+                debug_level: debug_level,
+                buffer_size: buffer_size,
+            })
         }
 
         fn get_cmd(mut argument: CliSpec) -> CliSpec {
-            todo!()
+            argument = argument.add_argument(Argument {
+                name: TCP_STEP_ADDRESS.0.to_string(),
+                key: vec![TCP_STEP_ADDRESS.1.to_string()],
+                argument_occurrence: ArgumentOccurrence::Single,
+                value_type: ArgumentValueType::Single,
+                default_value: Some("127.0.0.1".to_string()),
+                help: Some(ArgumentHelp::Text(TCP_STEP_ADDRESS.2.to_string())),
+            });
+            argument = argument.add_argument(Argument {
+                name: TCP_STEP_PORT.0.to_string(),
+                key: vec![TCP_STEP_PORT.1.to_string()],
+                argument_occurrence: ArgumentOccurrence::Single,
+                value_type: ArgumentValueType::Single,
+                default_value: Some("80".to_string()),
+                help: Some(ArgumentHelp::Text(TCP_STEP_PORT.2.to_string())),
+            });
+            argument
         }
     }
 
-    impl Copy for TcpStep {}
-
     impl Clone for TcpStep {
         fn clone(&self) -> Self {
-            todo!()
+            Self {
+                address: self.address.clone(),
+                port: self.port.clone(),
+                connection: unsafe { TcpStream::from_raw_fd(self.connection.as_raw_fd()) },
+                debug_level: self.debug_level,
+                buffer_size: self.buffer_size,
+            }
         }
     }
 
     impl AsRawFd for TcpStep {
         fn as_raw_fd(&self) -> std::os::unix::prelude::RawFd {
-            todo!()
+            self.connection.as_raw_fd()
         }
     }
 }

@@ -1,16 +1,10 @@
 pub mod base {
     use std::{
-        collections::HashMap,
-        error, io,
-        iter::Rev,
-        net::AddrParseError,
-        ops::{Deref, DerefMut},
-        os::fd::{AsRawFd, RawFd},
-        result,
-        slice::Iter,
+        collections::HashMap, error, fmt::{Display, Write}, future::IntoFuture, io, iter::Rev, net::AddrParseError, ops::{Deref, DerefMut}, os::fd::{AsRawFd, RawFd}, result, slice::{Iter, IterMut}
     };
 
     use cliparser::types::{CliParsed, CliSpec};
+    use libc::sock_filter;
     use mio::event::Source;
 
     #[derive(Debug)]
@@ -30,33 +24,9 @@ pub mod base {
         Info = 3,
     }
 
-    impl From<io::Error> for Error {
-        fn from(value: io::Error) -> Self {
-            Error::IoError(value)
-        }
-    }
-
-    impl From<AddrParseError> for Error {
-        fn from(value: AddrParseError) -> Self {
-            Error::AddrParseError(value)
-        }
-    }
-
-    impl From<i32> for DebugLevel {
-        fn from(value: i32) -> Self {
-            match value {
-                0 => DebugLevel::None,
-                1 => DebugLevel::Crit,
-                2 => DebugLevel::Warn,
-                3 => DebugLevel::Info,
-                _ => DebugLevel::Info,
-            }
-        }
-    }
-
     pub trait Step: Send + Sync + BoxedClone + AsRawFd {
-        fn process_data_forward(&self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error>;
-        fn process_data_backward(&self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error>;
+        fn process_data_forward(&mut self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error>;
+        fn process_data_backward(&mut self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error>;
     }
 
     pub trait BoxedClone {
@@ -95,6 +65,66 @@ pub mod base {
 
     pub struct Pipeline {
         steps: Vec<Box<dyn Step>>,
+    }
+
+    impl Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Msg(m) => f.write_fmt(format_args!("{}", m)),
+                Error::IoError(e) => f.write_fmt(format_args!("{}", e)),
+                Error::Unknown => f.write_fmt(format_args!("{}", "Unknown Error")),
+                Error::RequireOption(r) => f.write_fmt(format_args!("{}", r)),
+                Error::ParseIntError => f.write_fmt(format_args!("{}", "Parse Int Error")),
+                Error::AddrParseError(e) => f.write_fmt(format_args!("{}", e)),
+            }
+        }
+    }
+
+    impl From<io::Error> for Error {
+        fn from(value: io::Error) -> Self {
+            Error::IoError(value)
+        }
+    }
+
+    impl From<AddrParseError> for Error {
+        fn from(value: AddrParseError) -> Self {
+            Error::AddrParseError(value)
+        }
+    }
+
+    impl From<i32> for DebugLevel {
+        fn from(value: i32) -> Self {
+            match value {
+                0 => DebugLevel::None,
+                1 => DebugLevel::Crit,
+                2 => DebugLevel::Warn,
+                3 => DebugLevel::Info,
+                _ => DebugLevel::Info,
+            }
+        }
+    }
+
+    impl Into<i32> for &DebugLevel {
+        fn into(self) -> i32 {
+            match self {
+                DebugLevel::None => 0,
+                DebugLevel::Crit => 1,
+                DebugLevel::Warn => 2,
+                DebugLevel::Info => 3,
+            }
+        }
+    }
+
+    impl PartialEq<i32> for DebugLevel {
+        fn eq(&self, other: &i32) -> bool {
+            <&DebugLevel as Into<i32>>::into(self) == other.clone()
+        }
+    }
+
+    impl PartialOrd<i32> for DebugLevel {
+        fn partial_cmp(&self, other: &i32) -> Option<std::cmp::Ordering> {
+            <DebugLevel as PartialOrd<i32>>::partial_cmp(&self, other)
+        }
     }
 
     impl Pipeline {
@@ -140,15 +170,16 @@ pub mod base {
     }
 
     impl Pipeline {
-        pub fn iter_forwad(&self) -> Iter<Box<dyn Step>> {
-            self.iter()
+        pub fn iter_forwad(&mut self) -> IterMut<Box<dyn Step>> {
+            self.iter_mut()
         }
 
-        pub fn iter_backward(&self) -> Rev<Iter<Box<dyn Step>>> {
-            self[0..self.len()].iter().rev()
+        pub fn iter_backward(&mut self) -> Rev<IterMut<Box<dyn Step>>> {
+            let len = self.len();
+            self[0..len].iter_mut().rev()
         }
-    
-        pub fn read_pipeline(&self) -> Result<Vec<u8>, Error> {
+
+        pub fn read_pipeline(&mut self) -> Result<Vec<u8>, Error> {
             let mut buffer: Vec<u8> = vec![0u8; 0];
             for step in self.iter_backward() {
                 buffer = step.process_data_backward(&mut buffer)?;
@@ -156,7 +187,7 @@ pub mod base {
             Ok(buffer)
         }
 
-        pub fn write_pipeline(&self, mut buffer: Vec<u8>) -> Result<(), Error> {
+        pub fn write_pipeline(&mut self, mut buffer: Vec<u8>) -> Result<(), Error> {
             for step in self.iter_forwad() {
                 buffer = step.process_data_forward(buffer.to_vec().as_mut())?;
             }

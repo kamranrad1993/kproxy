@@ -88,7 +88,7 @@ fn main() {
     cli_spec = StdioEntry::get_cmd(cli_spec);
     cli_spec = StdioStep::get_cmd(cli_spec);
     cli_spec = TcpEntry::get_cmd(cli_spec);
-    // cli_spec = TcpStep::get_cmd(cli_spec);
+    cli_spec = TcpStep::get_cmd(cli_spec);
 
     let args = Vec::from_iter(env::args());
     let args = args
@@ -167,6 +167,9 @@ fn run(cli_parsed: CliParsed, debug_level: DebugLevel) {
         match Some(step) {
             Some("stdio") => pipeline.add_step(Box::new(
                 StdioStep::new(cli_parsed.clone(), debug_level).unwrap(),
+            )),
+            Some("tcp") => pipeline.add_step(Box::new(
+                TcpStep::new(cli_parsed.clone(), debug_level).unwrap(),
             )),
             Some(_) => {
                 eprintln!("Unknown step");
