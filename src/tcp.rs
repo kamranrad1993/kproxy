@@ -1,9 +1,8 @@
 pub mod tcp {
-    use std::borrow::BorrowMut;
-    use std::collections::HashMap;
-    use std::io::{Read, Write};
+    // use polling::{Event, Events, PollMode, Poller};
+    use std::io::{ErrorKind, Read, Write};
+    // use std::net::{TcpListener, TcpStream};
     use std::os::fd::AsRawFd;
-    use std::time::Duration;
     use std::vec;
 
     use cliparser::types::{
@@ -58,11 +57,11 @@ pub mod tcp {
             let mut connection_counter = 0;
 
             loop {
-                poll.poll(&mut events, Some(Duration::from_millis(10)))?;
+                poll.poll(&mut events, None)?;
                 for event in events.iter() {
                     match event.token() {
                         SERVER_TOKEN => {
-                            let mut connection = server.accept()?;
+                            let connection = server.accept()?;
 
                             let mut client = Ref::new(TcpEntryContext {
                                 connection: connection.0,
@@ -73,9 +72,6 @@ pub mod tcp {
 
                             connection_counter += 1;
                             let token = Token(connection_counter);
-                            connection_counter += 1;
-                            let pipeline_token = Token(connection_counter);
-
                             poll.registry()
                                 .register(
                                     &mut client.connection,
@@ -83,9 +79,14 @@ pub mod tcp {
                                     Interest::READABLE | Interest::WRITABLE,
                                 )
                                 .unwrap();
+
+                            connection_counter += 1;
+                            let pipeline_token = Token(connection_counter);
                             poll.registry()
                                 .register(
                                     &mut client.pipeline,
+                                    // &mut mio::unix::SourceFd(&client.pipeline.as_raw_fd()),
+                                    // &mut mio::unix::SourceFd(&std::io::stdin().as_raw_fd()),
                                     pipeline_token,
                                     Interest::READABLE | Interest::WRITABLE,
                                 )
@@ -107,28 +108,40 @@ pub mod tcp {
                             match other.0 % 2 {
                                 0 => {
                                     // pipeline has io event
-                                    if event.is_readable() {
-                                        TcpEntry::read_pipeline(client)?;
-                                    }
 
-                                    if event.is_writable() {
-                                        TcpEntry::write_pipeline(client)?;
+                                    if event.is_readable() {
+                                        if let Err(e) = TcpEntry::read_pipeline(client) {
+                                            match e {
+                                                Error::IoError(e) => {
+                                                    if e.kind() == ErrorKind::WouldBlock {
+                                                        continue;
+                                                    }
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                        TcpEntry::write_client(client).unwrap();
                                     }
                                 }
                                 1 => {
                                     // client has io event
                                     if event.is_readable() {
-                                        TcpEntry::read_client(self.buffer_size, client)?;
-                                    }
-
-                                    if event.is_writable() {
-                                        TcpEntry::write_client(client)?;
+                                        TcpEntry::read_client(self.buffer_size, client).unwrap();
+                                        if let Err(e) = TcpEntry::write_pipeline(client) {
+                                            match e {
+                                                Error::IoError(e) => {
+                                                    if e.kind() == ErrorKind::WouldBlock {
+                                                        continue;
+                                                    }
+                                                }
+                                                _ => {}
+                                            }
+                                        }
                                     }
                                 }
                                 _ => unreachable!(),
                             }
                         }
-                        _ => unreachable!(),
                     }
                 }
             }
@@ -151,7 +164,7 @@ pub mod tcp {
         fn write_client(client: &mut TcpEntryContext) -> Result<(), Error> {
             if client.pipeline_buf.len() > 0 {
                 client.connection.write(client.pipeline_buf.as_slice())?;
-                // client.pipeline_buf.clear();
+                client.pipeline_buf.clear();
             }
             Ok(())
         }
@@ -161,7 +174,7 @@ pub mod tcp {
                 client
                     .pipeline
                     .write_pipeline(client.connection_buf.clone())?;
-                // client.connection_buf.clear();
+                client.connection_buf.clear();
             }
             Ok(())
         }

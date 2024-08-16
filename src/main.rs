@@ -1,4 +1,5 @@
 use std::env;
+use std::io::Read;
 use std::process::exit;
 
 use kproxy::{

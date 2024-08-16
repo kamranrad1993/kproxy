@@ -3,8 +3,12 @@ pub mod stdio {
         fmt::Display,
         io::{self, stdin, stdout, Read, Stdin, Stdout, Write},
         ops::{BitAnd, BitOr},
-        os::{fd::{AsRawFd, RawFd}, unix::net::UnixStream},
+        os::{
+            fd::{AsRawFd, RawFd},
+            unix::net::UnixStream,
+        },
         sync::Mutex,
+        time::Duration,
     };
     extern crate lazy_static;
 
@@ -31,6 +35,7 @@ pub mod stdio {
         Argument, ArgumentHelp, ArgumentOccurrence, ArgumentValueType, CliParsed, CliSpec,
     };
     use lazy_static::lazy_static;
+    // use mio::{Events, Interest, Poll, Token};
 
     use crate::{
         base::base::DebugLevel, BoxedClone, Entry, EntryStatic, Error, Pipeline, Step, StepStatic,
@@ -40,23 +45,54 @@ pub mod stdio {
     pub struct StdioEntry {
         pipeline: Pipeline,
         debug_level: DebugLevel,
+        buffer_size: usize,
     }
 
     impl Entry for StdioEntry {
         fn listen(&mut self) -> Result<(), Error> {
+            // let mut poll = Poll::new()?;
+            // let mut events = Events::with_capacity(128);
+            // poll.registry().register(
+            //     &mut mio::unix::SourceFd(&stdin().as_raw_fd()),
+            //     Token(0),
+            //     Interest::READABLE,
+            // )?;
+
+            // loop {
+            //     poll.poll(&mut events,Some(Duration::from_millis(10)))?;
+            //     for event in events.iter() {
+            //         match event.token() {
+            //             Token(0) => {
+            //                 let mut buf = vec![0u8; self.buffer_size];
+            //                 let size = STDIN.lock().unwrap().read(buf.as_mut_slice())?;
+
+            //                 self.handle_pipeline(buf[0..size].to_vec())?;
+            //             }
+            //             _ => unreachable!(),
+            //         }
+            //     }
+            // }
+
+            // loop {
+            //     let mut available: usize = 0;
+            //     let result: i32 = unsafe { libc::ioctl(0, libc::FIONREAD, &mut available) };
+
+            //     if result == -1 {
+            //         let errno = std::io::Error::last_os_error();
+            //         return Err(Error::IoError(errno));
+            //     } else if available > 0 {
+            //         let mut buf = vec![0u8; available];
+            //         STDIN.lock().unwrap().read(buf.as_mut_slice())?;
+
+            //         self.handle_pipeline(buf)?;
+            //     }
+            // }
+
             loop {
-                let mut available: usize = 0;
-                let result: i32 = unsafe { libc::ioctl(0, libc::FIONREAD, &mut available) };
+                let mut buf = vec![0u8; self.buffer_size];
+                let size = STDIN.lock().unwrap().read(buf.as_mut_slice())?;
 
-                if result == -1 {
-                    let errno = std::io::Error::last_os_error();
-                    return Err(Error::IoError(errno));
-                } else if available > 0 {
-                    let mut buf = vec![0u8; available];
-                    STDIN.lock().unwrap().read(buf.as_mut_slice())?;
-
-                    self.handle_pipeline(buf)?;
-                }
+                self.handle_pipeline(buf[0..size].to_vec())?;
             }
         }
     }
@@ -80,9 +116,20 @@ pub mod stdio {
             pipeline: Pipeline,
             debug_level: DebugLevel,
         ) -> Result<StdioEntry, Error> {
+            let buffer_size = match args.argument_values.get(BUFFER_SIZE.0) {
+                Some(buffer_size) => buffer_size[0].clone(),
+                None => return Err(Error::RequireOption(BUFFER_SIZE.0.to_string())),
+            };
+
+            let buffer_size = match str::parse::<usize>(buffer_size.as_str()) {
+                Ok(buffer_size) => buffer_size,
+                Err(e) => return Err(Error::ParseIntError),
+            };
+
             Ok(Self {
                 pipeline,
                 debug_level,
+                buffer_size,
             })
         }
 
@@ -162,7 +209,7 @@ pub mod stdio {
         stdout_mode: StdoutMode,
         debug_level: DebugLevel,
         buffer_size: usize,
-        streams: (UnixStream, UnixStream)
+        // streams: (UnixStream, UnixStream),
     }
 
     impl Step for StdioStep {
@@ -227,7 +274,10 @@ pub mod stdio {
                 debug_level: self.debug_level.clone(),
                 stdout_mode: self.stdout_mode.clone(),
                 buffer_size: self.buffer_size,
-                streams: (self.streams.0.try_clone().unwrap(), self.streams.1.try_clone().unwrap())
+                // streams: (
+                //     self.streams.0.try_clone().unwrap(),
+                //     self.streams.1.try_clone().unwrap(),
+                // ),
             })
         }
     }
@@ -252,18 +302,18 @@ pub mod stdio {
             };
 
             let (mut stream1, stream2) = UnixStream::pair()?;
-            let fd = stream2.as_raw_fd();
-            unsafe {
-                libc::dup2(fd, 0);
-                libc::dup2(fd, 1);
-                libc::close(fd);
-            }
+            // let fd = stream2.as_raw_fd();
+            // unsafe {
+            //     libc::dup2(fd, 0);
+            //     libc::dup2(fd, 1);
+            //     libc::close(fd);
+            // }
 
             Ok(Self {
                 stdout_mode,
                 debug_level,
                 buffer_size,
-                streams: (stream1,stream2)
+                // streams: (stream1, stream2),
             })
         }
 
@@ -297,7 +347,10 @@ pub mod stdio {
                 debug_level: self.debug_level.clone(),
                 stdout_mode: self.stdout_mode.clone(),
                 buffer_size: self.buffer_size,
-                streams: (self.streams.0.try_clone().unwrap(), self.streams.1.try_clone().unwrap()),
+                // streams: (
+                //     self.streams.0.try_clone().unwrap(),
+                //     self.streams.1.try_clone().unwrap(),
+                // ),
             }
         }
     }
@@ -310,9 +363,9 @@ pub mod stdio {
             //         STDOUT.lock().unwrap().as_raw_fd(),
             //     )
             // };
-            // // STDIN.lock().unwrap().as_raw_fd()
+            STDIN.lock().unwrap().as_raw_fd()
             // return fd as RawFd;
-            self.streams.0.as_raw_fd()
+            // self.streams.0.as_raw_fd()
         }
     }
 }
