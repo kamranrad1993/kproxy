@@ -1,14 +1,10 @@
 pub mod stdio {
     use std::{
         fmt::Display,
-        io::{self, stdin, stdout, Read, Stdin, Stdout, Write},
+        io::{stdin, stdout, Read, Stdin, Stdout, Write},
         ops::{BitAnd, BitOr},
-        os::{
-            fd::{AsRawFd, RawFd},
-            unix::net::UnixStream,
-        },
+        os::{fd::AsRawFd, unix::net::UnixStream},
         sync::Mutex,
-        time::Duration,
     };
     extern crate lazy_static;
 
@@ -16,12 +12,12 @@ pub mod stdio {
         Argument, ArgumentHelp, ArgumentOccurrence, ArgumentValueType, CliParsed, CliSpec,
     };
     use lazy_static::lazy_static;
-    use mio::{event::Source, unix::SourceFd, Events, Interest, Poll, Token};
+    use mio::{unix::SourceFd, Events, Interest, Poll, Token};
     // use mio::{Events, Interest, Poll, Token};
 
     use crate::{
         base::base::DebugLevel, BoxedClone, Entry, EntryStatic, Error, Pipeline, Step, StepStatic,
-        TcpStep, BUFFER_SIZE,
+        BUFFER_SIZE,
     };
 
     const FORWARD_STDOUT_OPTION: (&str, &str, &str) = (
@@ -36,7 +32,7 @@ pub mod stdio {
     );
 
     lazy_static! {
-        static ref STDOUT: Mutex<io::Stdout> = Mutex::new(io::stdout());
+        static ref STDOUT: Mutex<Stdout> = Mutex::new(stdout());
     }
 
     lazy_static! {
@@ -60,7 +56,11 @@ pub mod stdio {
             let mut fd = SourceFd(&fd);
             poll.registry()
                 .register(&mut fd, STDIN_TOKEN, Interest::READABLE)?;
-            let mut connection_counter = 0;
+            poll.registry().register(
+                &mut self.pipeline,
+                PIPELINE_TOKEN,
+                Interest::READABLE | Interest::WRITABLE,
+            )?;
 
             let mut buf = vec![0u8; self.buffer_size];
             let mut buf_fill_size = 0;
@@ -70,32 +70,22 @@ pub mod stdio {
                     match event.token() {
                         STDIN_TOKEN => {
                             buf_fill_size = STDIN.lock().unwrap().read(buf.as_mut_slice())?;
+                            if buf_fill_size > 0 {
+                                self.pipeline
+                                    .write_pipeline(buf[0..buf_fill_size].to_vec())?;
+                                buf_fill_size = 0;
+                            }
                         }
                         PIPELINE_TOKEN => {
                             if event.is_readable() {
                                 let data = self.pipeline.read_pipeline()?;
-                            }
-                            if event.is_writable() {
-                                self.pipeline.write_pipeline(buf)?;
-                                buf.clear();
+                                STDOUT.lock().unwrap().write(&data)?;
                             }
                         }
                         _ => unreachable!(),
                     }
                 }
             }
-        }
-    }
-
-    impl StdioEntry {
-        fn handle_pipeline(&mut self, mut data: Vec<u8>) -> Result<(), Error> {
-            for step in self.pipeline.iter_forwad() {
-                data = step.process_data_forward(&mut data)?;
-            }
-            for step in self.pipeline.iter_backward() {
-                data = step.process_data_backward(&mut data)?;
-            }
-            Ok(())
         }
     }
 
@@ -290,14 +280,6 @@ pub mod stdio {
                 Ok(buffer_size) => buffer_size,
                 Err(e) => return Err(Error::ParseIntError),
             };
-
-            let (mut stream1, stream2) = UnixStream::pair()?;
-            // let fd = stream2.as_raw_fd();
-            // unsafe {
-            //     libc::dup2(fd, 0);
-            //     libc::dup2(fd, 1);
-            //     libc::close(fd);
-            // }
 
             Ok(Self {
                 stdout_mode,
