@@ -1,5 +1,7 @@
 pub const BUFFER_SIZE : (&str, &str, &str, &str)= ("BufferSize", "--buffer-size", "-b", "Maximum buffer size");
 
+mod id_pool;
+
 mod data_structures;
 pub use data_structures::multi_key_map::{MultiMap, Ref};
 
@@ -31,3 +33,5 @@ pub fn create_socket_addr(address: &str, port: u16) -> Result<SocketAddr, Error>
         Err(e) => Err(Error::Msg(format!("Failed to resolve address: {}", e))),
     }
 }
+
+mod http;
