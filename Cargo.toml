@@ -13,3 +13,5 @@ mio = {version = "1.0.0", features = ['net','log','os-poll','os-ext']}
 tokio = {version = "1.39.3" , features = ['socket2', 'net']}
 hyper = {version = "1.4.1" , features = ['full' ,'server', 'client', 'http2', 'http1']}
 num = "0.4.3"
+id-pool = "0.2.2"
+h2 = "0.4.6"
