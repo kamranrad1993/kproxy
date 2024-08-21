@@ -15,3 +15,4 @@ hyper = {version = "1.4.1" , features = ['full' ,'server', 'client', 'http2', 'h
 num = "0.4.3"
 id-pool = "0.2.2"
 h2 = "0.4.6"
+async-std = "1.12.0"

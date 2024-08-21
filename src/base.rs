@@ -15,6 +15,7 @@ pub mod base {
         RequireOption(String),
         ParseIntError,
         AddrParseError(AddrParseError),
+        H2_error(h2::Error)
     }
 
     pub enum DebugLevel {
@@ -89,6 +90,12 @@ pub mod base {
     impl From<AddrParseError> for Error {
         fn from(value: AddrParseError) -> Self {
             Error::AddrParseError(value)
+        }
+    }
+
+    impl From<h2::Error> for Error {
+        fn from(value: h2::Error) -> Self {
+            Error::H2_error(value)
         }
     }
 

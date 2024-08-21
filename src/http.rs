@@ -1,14 +1,19 @@
 pub mod http {
+    use async_std::task::block_on;
     use cliparser::types::{
         Argument, ArgumentHelp, ArgumentOccurrence, ArgumentValueType, CliParsed, CliSpec,
     };
+    use hyper::body::Bytes;
     use hyper::server::conn;
+    use hyper::Request;
     use id_pool::IdPool;
-    use mio::net::{TcpListener, TcpStream};
+    use mio::unix::SourceFd;
+    // use mio::net::{TcpListener, TcpStream};
     use mio::{Events, Interest, Poll, Token};
     use std::io::{ErrorKind, Read, Write};
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::{result, string, vec};
+    use tokio::net::{TcpListener, TcpStream};
 
     use h2::server::{self, SendResponse};
     use h2::RecvStream;
@@ -52,7 +57,9 @@ pub mod http {
     }
 
     struct TcpEntryContext {
-        connection: TcpStream,
+        connection: server::Connection<TcpStream, Bytes>,
+        request: Request<RecvStream>,
+        response: SendResponse<Bytes>,
         pipeline: Pipeline,
         connection_buf: Vec<u8>,
         pipeline_buf: Vec<u8>,
@@ -61,12 +68,14 @@ pub mod http {
     impl Entry for HttpEntry {
         fn listen(&mut self) -> Result<(), Error> {
             let addr = create_socket_addr(self.address.as_str(), self.port)?;
-            let mut server = TcpListener::bind(addr)?;
+            let mut server = block_on(TcpListener::bind(addr))?;
 
             let mut poll = Poll::new()?;
             let mut events = Events::with_capacity(128);
+            let fd = server.as_raw_fd();
+            let mut fd = SourceFd(&fd);
             poll.registry()
-                .register(&mut server, SERVER_TOKEN, Interest::READABLE)?;
+                .register(&mut fd, SERVER_TOKEN, Interest::READABLE)?;
             let mut idpool = IdPool::new();
 
             loop {
@@ -74,10 +83,17 @@ pub mod http {
                 for event in events.iter() {
                     match event.token() {
                         SERVER_TOKEN => {
-                            let connection = server.accept()?;
+                            let connection = block_on(server.accept())?;
+                            let fd = connection.0.as_raw_fd();
+                            let mut handshacked_connection =
+                                block_on(server::handshake(connection.0)).unwrap();
+                            let (request, response) =
+                                block_on(handshacked_connection.accept()).unwrap()?;
 
                             let mut client = Ref::new(TcpEntryContext {
-                                connection: connection.0,
+                                connection: handshacked_connection,
+                                request: request,
+                                response: response,
                                 pipeline: self.pipeline_template.clone(),
                                 connection_buf: vec![0u8; 0],
                                 pipeline_buf: vec![0u8; 0],
@@ -90,21 +106,18 @@ pub mod http {
                                 }
                             }
 
-                            server::handshake(connection.0);
-
                             let token = Token(idpool.request_id().unwrap());
+                            let mut fd = SourceFd(&fd);
                             poll.registry()
-                                .register(
-                                    &mut client.connection,
-                                    token,
-                                    Interest::READABLE | Interest::WRITABLE,
-                                )
+                                .register(&mut fd, token, Interest::READABLE | Interest::WRITABLE)
                                 .unwrap();
 
                             let pipeline_token = Token(idpool.request_id().unwrap());
+                            let pfd = client.pipeline.as_raw_fd();
+                            let mut pfd = SourceFd(&pfd);
                             poll.registry()
                                 .register(
-                                    &mut client.pipeline,
+                                    &mut pfd,
                                     pipeline_token,
                                     Interest::READABLE | Interest::WRITABLE,
                                 )
@@ -199,8 +212,6 @@ pub mod http {
             // let size = client.connection.read(&mut buffer)?;
             // client.connection_buf.extend(buffer[0..size].to_vec());
             // Ok(())
-
-            
         }
 
         fn read_pipeline(client: &mut TcpEntryContext) -> Result<(), Error> {
