@@ -77,6 +77,7 @@ pub mod base {
                 Error::RequireOption(r) => f.write_fmt(format_args!("{}", r)),
                 Error::ParseIntError => f.write_fmt(format_args!("{}", "Parse Int Error")),
                 Error::AddrParseError(e) => f.write_fmt(format_args!("{}", e)),
+                Error::H2_error(e) => f.write_fmt(format_args!("{}", e)),
             }
         }
     }
@@ -130,7 +131,9 @@ pub mod base {
 
     impl PartialOrd<i32> for DebugLevel {
         fn partial_cmp(&self, other: &i32) -> Option<std::cmp::Ordering> {
-            <DebugLevel as PartialOrd<i32>>::partial_cmp(&self, other)
+            // <DebugLevel as PartialOrd<i32>>::partial_cmp(&self, other)
+            <&DebugLevel as Into<i32>>::into(self).partial_cmp(other)
+
         }
     }
 

@@ -1,4 +1,5 @@
-pub const BUFFER_SIZE : (&str, &str, &str, &str)= ("BufferSize", "--buffer-size", "-b", "Maximum buffer size");
+pub const BUFFER_SIZE: (&str, &str, &str, &str) =
+    ("BufferSize", "--buffer-size", "-b", "Maximum buffer size");
 
 mod id_pool;
 
@@ -7,7 +8,8 @@ pub use data_structures::multi_key_map::{MultiMap, Ref};
 
 mod base;
 use std::{
-    net::{IpAddr, SocketAddr, ToSocketAddrs}, str::FromStr
+    net::{IpAddr, SocketAddr, ToSocketAddrs},
+    str::FromStr,
 };
 
 pub use base::base::{
@@ -35,3 +37,4 @@ pub fn create_socket_addr(address: &str, port: u16) -> Result<SocketAddr, Error>
 }
 
 mod http;
+pub use http::http::HttpEntry;

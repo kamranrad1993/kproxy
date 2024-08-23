@@ -5,7 +5,7 @@ pub mod http {
     };
     use hyper::body::Bytes;
     use hyper::server::conn;
-    use hyper::Request;
+    use hyper::{Request, Response};
     use id_pool::IdPool;
     use mio::unix::SourceFd;
     // use mio::net::{TcpListener, TcpStream};
@@ -76,7 +76,7 @@ pub mod http {
             let mut fd = SourceFd(&fd);
             poll.registry()
                 .register(&mut fd, SERVER_TOKEN, Interest::READABLE)?;
-            let mut idpool = IdPool::new();
+            let mut connection_counter = 0;
 
             loop {
                 poll.poll(&mut events, None)?;
@@ -106,13 +106,15 @@ pub mod http {
                                 }
                             }
 
-                            let token = Token(idpool.request_id().unwrap());
+                            connection_counter += 1;
+                            let token = Token(connection_counter);
                             let mut fd = SourceFd(&fd);
                             poll.registry()
                                 .register(&mut fd, token, Interest::READABLE | Interest::WRITABLE)
                                 .unwrap();
 
-                            let pipeline_token = Token(idpool.request_id().unwrap());
+                            connection_counter += 1;
+                            let pipeline_token = Token(connection_counter);
                             let pfd = client.pipeline.as_raw_fd();
                             let mut pfd = SourceFd(&pfd);
                             poll.registry()
@@ -208,10 +210,14 @@ pub mod http {
 
     impl HttpEntry {
         fn read_client(buffer_size: usize, client: &mut TcpEntryContext) -> Result<(), Error> {
-            // let mut buffer = vec![0u8; buffer_size];
-            // let size = client.connection.read(&mut buffer)?;
-            // client.connection_buf.extend(buffer[0..size].to_vec());
-            // Ok(())
+            let body = client.request.body_mut();
+            match block_on(body.data()) {
+                Some(data) => {
+                    client.connection_buf.extend(data?.iter());
+                }
+                None => {}
+            }
+            Ok(())
         }
 
         fn read_pipeline(client: &mut TcpEntryContext) -> Result<(), Error> {
@@ -221,7 +227,9 @@ pub mod http {
 
         fn write_client(client: &mut TcpEntryContext) -> Result<(), Error> {
             if client.pipeline_buf.len() > 0 {
-                client.connection.write(client.pipeline_buf.as_slice())?;
+                let response = Response::new(());
+                let mut send = client.response.send_response(response, true)?;
+                send.send_data(Bytes::from_iter(client.pipeline_buf.clone()), false)?;
                 client.pipeline_buf.clear();
             }
             Ok(())
@@ -238,19 +246,19 @@ pub mod http {
         }
     }
 
-    impl EntryStatic<TcpEntry> for TcpEntry {
+    impl EntryStatic<HttpEntry> for HttpEntry {
         fn new(
             args: CliParsed,
             pipeline: crate::Pipeline,
             debug_level: DebugLevel,
-        ) -> Result<TcpEntry, Error> {
-            let address = match args.argument_values.get(TCP_ENTRY_ADDRESS.0) {
+        ) -> Result<HttpEntry, Error> {
+            let address = match args.argument_values.get(HTTP_ENTRY_ADDRESS.0) {
                 Some(address) => address[0].clone(),
-                None => return Err(Error::RequireOption(TCP_ENTRY_ADDRESS.0.to_string())),
+                None => return Err(Error::RequireOption(HTTP_ENTRY_ADDRESS.0.to_string())),
             };
-            let port = match args.argument_values.get(TCP_ENTRY_PORT.0) {
+            let port = match args.argument_values.get(HTTP_ENTRY_PORT.0) {
                 Some(port) => port[0].clone(),
-                None => return Err(Error::RequireOption(TCP_ENTRY_PORT.0.to_string())),
+                None => return Err(Error::RequireOption(HTTP_ENTRY_PORT.0.to_string())),
             };
             let buffer_size = match args.argument_values.get(BUFFER_SIZE.0) {
                 Some(buffer_size) => buffer_size[0].clone(),
@@ -266,7 +274,7 @@ pub mod http {
                 Err(e) => return Err(Error::ParseIntError),
             };
 
-            Ok(TcpEntry {
+            Ok(HttpEntry {
                 address,
                 port,
                 debug_level,
@@ -278,132 +286,132 @@ pub mod http {
 
         fn get_cmd(mut argument: CliSpec) -> CliSpec {
             argument = argument.add_argument(Argument {
-                name: TCP_ENTRY_ADDRESS.0.to_string(),
-                key: vec![TCP_ENTRY_ADDRESS.1.to_string()],
+                name: HTTP_ENTRY_ADDRESS.0.to_string(),
+                key: vec![HTTP_ENTRY_ADDRESS.1.to_string()],
                 argument_occurrence: ArgumentOccurrence::Single,
                 value_type: ArgumentValueType::Single,
                 default_value: Some("0.0.0.0".to_string()),
-                help: Some(ArgumentHelp::Text(TCP_ENTRY_ADDRESS.2.to_string())),
+                help: Some(ArgumentHelp::Text(HTTP_ENTRY_ADDRESS.2.to_string())),
             });
             argument = argument.add_argument(Argument {
-                name: TCP_ENTRY_PORT.0.to_string(),
-                key: vec![TCP_ENTRY_PORT.1.to_string()],
+                name: HTTP_ENTRY_PORT.0.to_string(),
+                key: vec![HTTP_ENTRY_PORT.1.to_string()],
                 argument_occurrence: ArgumentOccurrence::Single,
                 value_type: ArgumentValueType::Single,
                 default_value: Some("80".to_string()),
-                help: Some(ArgumentHelp::Text(TCP_ENTRY_PORT.2.to_string())),
+                help: Some(ArgumentHelp::Text(HTTP_ENTRY_PORT.2.to_string())),
             });
             argument
         }
     }
 
-    pub struct TcpStep {
-        address: String,
-        port: u16,
-        connection: TcpStream,
-        debug_level: DebugLevel,
-        buffer_size: usize,
-    }
+    // pub struct TcpStep {
+    //     address: String,
+    //     port: u16,
+    //     connection: TcpStream,
+    //     debug_level: DebugLevel,
+    //     buffer_size: usize,
+    // }
 
-    impl TcpStep {}
+    // impl TcpStep {}
 
-    impl Step for TcpStep {
-        fn process_data_forward(&mut self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error> {
-            self.connection.write(&data)?;
-            Ok(data.clone())
-        }
+    // impl Step for TcpStep {
+    //     fn process_data_forward(&mut self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error> {
+    //         self.connection.write(&data)?;
+    //         Ok(data.clone())
+    //     }
 
-        fn process_data_backward(&mut self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error> {
-            let mut read_buffer = vec![0u8; self.buffer_size];
-            let read_size = self.connection.read(&mut read_buffer)?;
-            Ok(read_buffer[0..read_size].to_vec())
-        }
-    }
+    //     fn process_data_backward(&mut self, data: &mut Vec<u8>) -> Result<Vec<u8>, Error> {
+    //         let mut read_buffer = vec![0u8; self.buffer_size];
+    //         let read_size = self.connection.read(&mut read_buffer)?;
+    //         Ok(read_buffer[0..read_size].to_vec())
+    //     }
+    // }
 
-    impl BoxedClone for TcpStep {
-        fn bclone(&self) -> Box<dyn Step> {
-            Box::new(Self {
-                address: self.address.clone(),
-                port: self.port.clone(),
-                connection: unsafe { TcpStream::from_raw_fd(self.connection.as_raw_fd()) },
-                debug_level: self.debug_level,
-                buffer_size: self.buffer_size,
-            })
-        }
-    }
+    // impl BoxedClone for TcpStep {
+    //     fn bclone(&self) -> Box<dyn Step> {
+    //         Box::new(Self {
+    //             address: self.address.clone(),
+    //             port: self.port.clone(),
+    //             connection: unsafe { TcpStream::from_raw_fd(self.connection.as_raw_fd()) },
+    //             debug_level: self.debug_level,
+    //             buffer_size: self.buffer_size,
+    //         })
+    //     }
+    // }
 
-    impl StepStatic for TcpStep {
-        fn new(args: CliParsed, debug_level: DebugLevel) -> Result<Self, Error> {
-            let address = match args.argument_values.get(TCP_STEP_ADDRESS.0) {
-                Some(address) => address[0].clone(),
-                None => return Err(Error::RequireOption(TCP_STEP_ADDRESS.0.to_string())),
-            };
-            let port = match args.argument_values.get(TCP_STEP_PORT.0) {
-                Some(port) => port[0].clone(),
-                None => return Err(Error::RequireOption(TCP_STEP_PORT.0.to_string())),
-            };
-            let buffer_size = match args.argument_values.get(BUFFER_SIZE.0) {
-                Some(buffer_size) => buffer_size[0].clone(),
-                None => return Err(Error::RequireOption(BUFFER_SIZE.0.to_string())),
-            };
+    // impl StepStatic for TcpStep {
+    //     fn new(args: CliParsed, debug_level: DebugLevel) -> Result<Self, Error> {
+    //         let address = match args.argument_values.get(TCP_STEP_ADDRESS.0) {
+    //             Some(address) => address[0].clone(),
+    //             None => return Err(Error::RequireOption(TCP_STEP_ADDRESS.0.to_string())),
+    //         };
+    //         let port = match args.argument_values.get(TCP_STEP_PORT.0) {
+    //             Some(port) => port[0].clone(),
+    //             None => return Err(Error::RequireOption(TCP_STEP_PORT.0.to_string())),
+    //         };
+    //         let buffer_size = match args.argument_values.get(BUFFER_SIZE.0) {
+    //             Some(buffer_size) => buffer_size[0].clone(),
+    //             None => return Err(Error::RequireOption(BUFFER_SIZE.0.to_string())),
+    //         };
 
-            let port = match str::parse::<u16>(port.as_str()) {
-                Ok(port) => port,
-                Err(e) => return Err(Error::ParseIntError),
-            };
-            let buffer_size = match str::parse::<usize>(buffer_size.as_str()) {
-                Ok(buffer_size) => buffer_size,
-                Err(e) => return Err(Error::ParseIntError),
-            };
+    //         let port = match str::parse::<u16>(port.as_str()) {
+    //             Ok(port) => port,
+    //             Err(e) => return Err(Error::ParseIntError),
+    //         };
+    //         let buffer_size = match str::parse::<usize>(buffer_size.as_str()) {
+    //             Ok(buffer_size) => buffer_size,
+    //             Err(e) => return Err(Error::ParseIntError),
+    //         };
 
-            let addr = create_socket_addr(address.as_str(), port)?;
-            let connection = TcpStream::connect(addr)?;
+    //         let addr = create_socket_addr(address.as_str(), port)?;
+    //         let connection = TcpStream::connect(addr)?;
 
-            Ok(Self {
-                address: address,
-                port: port,
-                connection: connection,
-                debug_level: debug_level,
-                buffer_size: buffer_size,
-            })
-        }
+    //         Ok(Self {
+    //             address: address,
+    //             port: port,
+    //             connection: connection,
+    //             debug_level: debug_level,
+    //             buffer_size: buffer_size,
+    //         })
+    //     }
 
-        fn get_cmd(mut argument: CliSpec) -> CliSpec {
-            argument = argument.add_argument(Argument {
-                name: TCP_STEP_ADDRESS.0.to_string(),
-                key: vec![TCP_STEP_ADDRESS.1.to_string()],
-                argument_occurrence: ArgumentOccurrence::Single,
-                value_type: ArgumentValueType::Single,
-                default_value: Some("127.0.0.1".to_string()),
-                help: Some(ArgumentHelp::Text(TCP_STEP_ADDRESS.2.to_string())),
-            });
-            argument = argument.add_argument(Argument {
-                name: TCP_STEP_PORT.0.to_string(),
-                key: vec![TCP_STEP_PORT.1.to_string()],
-                argument_occurrence: ArgumentOccurrence::Single,
-                value_type: ArgumentValueType::Single,
-                default_value: Some("80".to_string()),
-                help: Some(ArgumentHelp::Text(TCP_STEP_PORT.2.to_string())),
-            });
-            argument
-        }
-    }
+    //     fn get_cmd(mut argument: CliSpec) -> CliSpec {
+    //         argument = argument.add_argument(Argument {
+    //             name: TCP_STEP_ADDRESS.0.to_string(),
+    //             key: vec![TCP_STEP_ADDRESS.1.to_string()],
+    //             argument_occurrence: ArgumentOccurrence::Single,
+    //             value_type: ArgumentValueType::Single,
+    //             default_value: Some("127.0.0.1".to_string()),
+    //             help: Some(ArgumentHelp::Text(TCP_STEP_ADDRESS.2.to_string())),
+    //         });
+    //         argument = argument.add_argument(Argument {
+    //             name: TCP_STEP_PORT.0.to_string(),
+    //             key: vec![TCP_STEP_PORT.1.to_string()],
+    //             argument_occurrence: ArgumentOccurrence::Single,
+    //             value_type: ArgumentValueType::Single,
+    //             default_value: Some("80".to_string()),
+    //             help: Some(ArgumentHelp::Text(TCP_STEP_PORT.2.to_string())),
+    //         });
+    //         argument
+    //     }
+    // }
 
-    impl Clone for TcpStep {
-        fn clone(&self) -> Self {
-            Self {
-                address: self.address.clone(),
-                port: self.port.clone(),
-                connection: unsafe { TcpStream::from_raw_fd(self.connection.as_raw_fd()) },
-                debug_level: self.debug_level,
-                buffer_size: self.buffer_size,
-            }
-        }
-    }
+    // impl Clone for TcpStep {
+    //     fn clone(&self) -> Self {
+    //         Self {
+    //             address: self.address.clone(),
+    //             port: self.port.clone(),
+    //             connection: unsafe { TcpStream::from_raw_fd(self.connection.as_raw_fd()) },
+    //             debug_level: self.debug_level,
+    //             buffer_size: self.buffer_size,
+    //         }
+    //     }
+    // }
 
-    impl AsRawFd for TcpStep {
-        fn as_raw_fd(&self) -> std::os::unix::prelude::RawFd {
-            self.connection.as_raw_fd()
-        }
-    }
+    // impl AsRawFd for TcpStep {
+    //     fn as_raw_fd(&self) -> std::os::unix::prelude::RawFd {
+    //         self.connection.as_raw_fd()
+    //     }
+    // }
 }

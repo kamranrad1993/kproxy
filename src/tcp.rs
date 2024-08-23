@@ -31,12 +31,12 @@ pub mod tcp {
     const TCP_STEP_ADDRESS: (&str, &str, &str) = (
         "tcp-step-address",
         "--tcp-sa",
-        "(TcpEntry) Tcp step endpoint address",
+        "(TcpStep) Tcp step endpoint address",
     );
     const TCP_STEP_PORT: (&str, &str, &str) = (
         "tcp-step-port",
         "--tcp-sp",
-        "(TcpEntry) Tcp step endpoint port",
+        "(TcpStep) Tcp step endpoint port",
     );
 
     const SERVER_TOKEN: Token = Token(0);
